@@ -2806,7 +2806,7 @@ def generate_expert_analysis(symbol, data, signals, support_levels, resistance_l
         'entry_low': nearest_support[1] if nearest_support else price * 0.98,
         'entry_high': price,
         'stop_loss': (nearest_support[1] if nearest_support else price) * 0.97 if position_bias in ['aggressive_long', 'long', 'cautious_long'] else (nearest_resistance[1] if nearest_resistance else price) * 1.03,
-        'stop_pct': support_dist + 3 if position_bias in ['aggressive_long', 'long', 'cautious_long'] else resistance_dist + 3,
+        'stop_pct': support_dist + 3 if position_bias in ['aggressive_long', 'long', 'cautious_long'] else resist_dist + 3,
         'target_1': upside_target,
         'target_1_pct': upside_pct,
         'target_2': target_high if target_high > upside_target else None,
