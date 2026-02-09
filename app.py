@@ -1,7 +1,19 @@
 """
-Pre-Market Command Center v8.1
+Pre-Market Command Center v8.2
 Institutional-Grade Market Prep Dashboard
 AI Expert Analysis · Earnings Intelligence · Whale Tracker · Support/Resistance
+
+v8.2 Updates:
+- Fixed futures/indices data loading (NQ=F, ES=F, etc.)
+- Enhanced institutional activity analysis with:
+  * Smart Money Score (0-100)
+  * Squeeze Potential indicator
+  * Accumulation/Distribution phase detection
+  * Institutional Momentum signals
+  * Enhanced dark pool sentiment analysis
+- Improved chart data cleaning (more lenient, handles edge cases)
+- Added None checks for chart rendering
+- All indicators preserved: RSI, MACD, Bollinger Bands, Volume, MAs
 
 v8.1 Updates:
 - Code quality improvements and bug fixes
@@ -11,11 +23,12 @@ v8.1 Updates:
 - Added safe division utilities
 
 Features:
-- 🐋 Institutional Activity & Whale Tracker
+- 🐋 Institutional Activity & Whale Tracker (enhanced)
 - 📅 Earnings Center (calendar, analyzer, news)
 - 📰 News Flow Analysis in Market Brief
 - 📈 Advanced Options Screener with time-of-day weighting
 - 🎯 AI-generated macro analysis
+- 🧠 Smart Money indicators
 """
 
 import streamlit as st
@@ -427,131 +440,179 @@ def fetch_finviz_insider_data(symbol):
 
 @st.cache_data(ttl=300)
 def fetch_comprehensive_data(symbol):
+    """
+    Fetch comprehensive data for any symbol type (stocks, ETFs, futures, indices, crypto).
+    Handles different instrument types gracefully with appropriate fallbacks.
+    """
+    data = {
+        'info': {}, 
+        'hist_1d': None, 
+        'hist_5d': None, 
+        'hist_1mo': None, 
+        'hist_3mo': None, 
+        'hist_6mo': None, 
+        'hist_1y': None, 
+        'news': [], 
+        'earnings': None, 
+        'recommendations': None, 
+        'calendar': None, 
+        'holders': None,
+        'insider_transactions': None,
+        'insider_roster': None,
+        'major_holders': None,
+        'options_data': None,
+        'finviz_data': {},
+    }
+    
     try:
         ticker = yf.Ticker(symbol)
-        # Disable pre/post market data to avoid large wicks
-        data = {
-            'info': ticker.info, 
-            'hist_1d': ticker.history(period="1d", interval="5m", prepost=False), 
-            'hist_5d': ticker.history(period="5d", interval="15m", prepost=False), 
-            'hist_1mo': ticker.history(period="1mo", interval="1h", prepost=False), 
-            'hist_3mo': ticker.history(period="3mo", interval="1d", prepost=False), 
-            'hist_6mo': ticker.history(period="6mo", interval="1d", prepost=False), 
-            'hist_1y': ticker.history(period="1y", interval="1d", prepost=False), 
-            'news': [], 
-            'earnings': None, 
-            'recommendations': None, 
-            'calendar': None, 
-            'holders': None,
-            'insider_transactions': None,
-            'insider_roster': None,
-            'major_holders': None,
-            'options_data': None,
-        }
         
-        # Fetch news using dedicated function with multiple fallbacks
-        data['news'] = fetch_stock_news_direct(symbol)
-        
-        # Fetch earnings with multiple fallback methods
+        # === FETCH INFO (with fallback) ===
         try:
-            # Method 1: earnings_history
-            eh = ticker.earnings_history
-            if eh is not None and not eh.empty: 
-                data['earnings'] = eh
-        except: pass
+            info = ticker.info
+            if info and isinstance(info, dict):
+                data['info'] = info
+        except Exception:
+            data['info'] = {'symbol': symbol}
         
-        if data['earnings'] is None:
+        # === FETCH HISTORICAL DATA (most important - try multiple timeframes) ===
+        # This is the critical part - we need at least some price data
+        timeframes = [
+            ('hist_5d', '5d', '15m'),
+            ('hist_1d', '1d', '5m'),
+            ('hist_1mo', '1mo', '1h'),
+            ('hist_3mo', '3mo', '1d'),
+            ('hist_6mo', '6mo', '1d'),
+            ('hist_1y', '1y', '1d'),
+        ]
+        
+        has_any_data = False
+        for key, period, interval in timeframes:
             try:
-                # Method 2: quarterly_earnings
-                qe = ticker.quarterly_earnings
-                if qe is not None and not qe.empty:
-                    data['earnings'] = qe
-            except: pass
+                hist = ticker.history(period=period, interval=interval, prepost=False)
+                if hist is not None and not hist.empty and len(hist) >= 2:
+                    data[key] = hist
+                    has_any_data = True
+            except Exception:
+                continue
         
-        if data['earnings'] is None:
+        # If no data at all, try one more time with simpler params
+        if not has_any_data:
             try:
-                # Method 3: earnings_dates
-                ed = ticker.earnings_dates
-                if ed is not None and not ed.empty:
-                    # Rename columns to match expected format
-                    if 'Reported EPS' in ed.columns and 'EPS Estimate' in ed.columns:
-                        ed = ed.rename(columns={'Reported EPS': 'epsActual', 'EPS Estimate': 'epsEstimate'})
-                    data['earnings'] = ed.dropna(subset=['epsActual'] if 'epsActual' in ed.columns else ed.columns[:1])
-            except: pass
+                hist = ticker.history(period="5d")
+                if hist is not None and not hist.empty:
+                    data['hist_5d'] = hist
+                    has_any_data = True
+            except Exception:
+                pass
         
-        # Fetch recommendations with multiple attempts
+        # Return None only if we have absolutely no price data
+        if not has_any_data:
+            return None
+        
+        # Detect instrument type for conditional data fetching
+        quote_type = data['info'].get('quoteType', '').upper()
+        is_stock = quote_type in ['EQUITY', ''] and '=F' not in symbol and not symbol.startswith('^')
+        is_etf = quote_type == 'ETF'
+        is_future = '=F' in symbol
+        is_index = symbol.startswith('^')
+        is_crypto = quote_type == 'CRYPTOCURRENCY' or '-USD' in symbol
+        
+        # === FETCH NEWS (works for most symbols) ===
         try:
-            recs = ticker.recommendations
-            if recs is not None and not recs.empty: data['recommendations'] = recs.tail(30)
-        except: pass
+            data['news'] = fetch_stock_news_direct(symbol)
+        except Exception:
+            data['news'] = []
         
-        if data['recommendations'] is None:
+        # === STOCK-SPECIFIC DATA (skip for futures/indices) ===
+        if is_stock or is_etf:
+            # Earnings data
+            for method in ['earnings_history', 'quarterly_earnings', 'earnings_dates']:
+                if data['earnings'] is not None:
+                    break
+                try:
+                    earnings_data = getattr(ticker, method, None)
+                    if earnings_data is not None and hasattr(earnings_data, 'empty') and not earnings_data.empty:
+                        if method == 'earnings_dates' and 'Reported EPS' in earnings_data.columns:
+                            earnings_data = earnings_data.rename(columns={'Reported EPS': 'epsActual', 'EPS Estimate': 'epsEstimate'})
+                        data['earnings'] = earnings_data
+                except Exception:
+                    continue
+            
+            # Recommendations
+            for method in ['recommendations', 'recommendations_summary']:
+                if data['recommendations'] is not None:
+                    break
+                try:
+                    recs = getattr(ticker, method, None)
+                    if recs is not None and hasattr(recs, 'empty') and not recs.empty:
+                        data['recommendations'] = recs.tail(30) if len(recs) > 30 else recs
+                except Exception:
+                    continue
+            
+            # Calendar
             try:
-                # Alternative: recommendations_summary
-                recs_sum = ticker.recommendations_summary
-                if recs_sum is not None and not recs_sum.empty:
-                    data['recommendations'] = recs_sum
-            except: pass
-        
-        try: data['calendar'] = ticker.calendar
-        except: pass
-        try:
-            h = ticker.institutional_holders
-            if h is not None and not h.empty: data['holders'] = h
-        except: pass
-        
-        # === INSTITUTIONAL ACTIVITY DATA ===
-        
-        # Insider Transactions (buys/sells)
-        try:
-            insider_txns = ticker.insider_transactions
-            if insider_txns is not None and not insider_txns.empty:
-                data['insider_transactions'] = insider_txns
-        except: pass
-        
-        # Insider Roster (who holds what)
-        try:
-            insider_roster = ticker.insider_roster_holders
-            if insider_roster is not None and not insider_roster.empty:
-                data['insider_roster'] = insider_roster
-        except: pass
-        
-        # Major Holders (ownership breakdown)
-        try:
-            major = ticker.major_holders
-            if major is not None and not major.empty:
-                data['major_holders'] = major
-        except: pass
-        
-        # Options data for unusual activity detection
-        try:
-            if ticker.options:
-                # Get nearest expiration
-                nearest_exp = ticker.options[0]
-                opt_chain = ticker.option_chain(nearest_exp)
-                
-                # Combine calls and puts
-                calls_df = opt_chain.calls.copy()
-                calls_df['type'] = 'call'
-                puts_df = opt_chain.puts.copy()
-                puts_df['type'] = 'put'
-                
-                data['options_data'] = {
-                    'expiration': nearest_exp,
-                    'calls': calls_df,
-                    'puts': puts_df,
-                }
-        except: pass
-        
-        # Fetch Finviz data for additional insights (insider data fallback)
-        try:
-            finviz_data = fetch_finviz_insider_data(symbol)
-            if finviz_data:
-                data['finviz_data'] = finviz_data
-        except: pass
+                data['calendar'] = ticker.calendar
+            except Exception:
+                pass
+            
+            # Holders data
+            try:
+                h = ticker.institutional_holders
+                if h is not None and not h.empty:
+                    data['holders'] = h
+            except Exception:
+                pass
+            
+            # === INSTITUTIONAL ACTIVITY DATA ===
+            try:
+                insider_txns = ticker.insider_transactions
+                if insider_txns is not None and not insider_txns.empty:
+                    data['insider_transactions'] = insider_txns
+            except Exception:
+                pass
+            
+            try:
+                insider_roster = ticker.insider_roster_holders
+                if insider_roster is not None and not insider_roster.empty:
+                    data['insider_roster'] = insider_roster
+            except Exception:
+                pass
+            
+            try:
+                major = ticker.major_holders
+                if major is not None and not major.empty:
+                    data['major_holders'] = major
+            except Exception:
+                pass
+            
+            # Options data
+            try:
+                if ticker.options:
+                    nearest_exp = ticker.options[0]
+                    chain = ticker.option_chain(nearest_exp)
+                    data['options_data'] = {
+                        'expiration': nearest_exp,
+                        'calls': chain.calls if hasattr(chain, 'calls') else None,
+                        'puts': chain.puts if hasattr(chain, 'puts') else None
+                    }
+            except Exception:
+                pass
+            
+            # Finviz data (stocks only)
+            if is_stock:
+                try:
+                    finviz_data = fetch_finviz_insider_data(symbol)
+                    if finviz_data:
+                        data['finviz_data'] = finviz_data
+                except Exception:
+                    pass
         
         return data
-    except: return None
+        
+    except Exception as e:
+        # Last resort - return minimal data structure
+        return None
 
 @st.cache_data(ttl=600)
 def fetch_economic_indicators():
@@ -948,8 +1009,15 @@ def generate_detailed_signals(hist, info):
 
 def analyze_institutional_activity(data, current_price):
     """
-    Analyze institutional activity including insider transactions, options flow, and ownership.
-    Returns a dictionary with whale/institutional signals.
+    Comprehensive institutional activity analysis including:
+    - Insider transactions with sentiment scoring
+    - Options flow analysis (unusual activity, sweeps, block trades)
+    - Dark pool activity estimation
+    - Short interest and squeeze potential
+    - Institutional ownership trends
+    - Smart money indicators
+    
+    Returns a dictionary with whale/institutional signals and detailed metrics.
     """
     activity = {
         'insider_sentiment': 'neutral',
@@ -971,8 +1039,13 @@ def analyze_institutional_activity(data, current_price):
         'avg_volume': 0,
         'relative_volume': 0,
         'dark_pool_estimate': 0,
+        'dark_pool_sentiment': 'neutral',
         'block_trades': [],
         'finviz_data': {},
+        'squeeze_potential': 0,
+        'smart_money_score': 0,
+        'accumulation_distribution': 'neutral',
+        'institutional_momentum': 'neutral',
     }
     
     info = data.get('info', {})
@@ -981,25 +1054,79 @@ def analyze_institutional_activity(data, current_price):
     activity['institutional_ownership'] = info.get('heldPercentInstitutions', 0) * 100 if info.get('heldPercentInstitutions') else 0
     activity['insider_ownership'] = info.get('heldPercentInsiders', 0) * 100 if info.get('heldPercentInsiders') else 0
     
-    # === SHORT INTEREST DATA ===
+    # === SHORT INTEREST DATA & SQUEEZE POTENTIAL ===
     activity['short_interest'] = info.get('shortPercentOfFloat', 0) * 100 if info.get('shortPercentOfFloat') else 0
     activity['short_ratio'] = info.get('shortRatio', 0) if info.get('shortRatio') else 0
+    
+    # Calculate squeeze potential score (0-100)
+    squeeze_score = 0
+    if activity['short_interest'] > 20:
+        squeeze_score += 40
+    elif activity['short_interest'] > 15:
+        squeeze_score += 30
+    elif activity['short_interest'] > 10:
+        squeeze_score += 20
+    
+    if activity['short_ratio'] > 5:
+        squeeze_score += 30
+    elif activity['short_ratio'] > 3:
+        squeeze_score += 20
+    elif activity['short_ratio'] > 2:
+        squeeze_score += 10
     
     # === VOLUME ANALYSIS ===
     activity['avg_volume'] = info.get('averageVolume', 0)
     current_volume = info.get('volume', 0)
     if activity['avg_volume'] > 0:
         activity['relative_volume'] = current_volume / activity['avg_volume']
+        # High volume with high short interest = higher squeeze potential
+        if activity['relative_volume'] > 2 and activity['short_interest'] > 10:
+            squeeze_score += 30
     
-    # === DARK POOL ESTIMATE ===
-    # Dark pools typically handle 35-40% of total equity volume
-    # We estimate based on relative volume and institutional ownership
-    if activity['institutional_ownership'] > 50 and activity['avg_volume'] > 1000000:
-        activity['dark_pool_estimate'] = 38  # High institutional = more dark pool
-    elif activity['institutional_ownership'] > 30:
-        activity['dark_pool_estimate'] = 35
-    else:
-        activity['dark_pool_estimate'] = 30
+    activity['squeeze_potential'] = min(squeeze_score, 100)
+    
+    # === DARK POOL ANALYSIS (Enhanced) ===
+    # Dark pools handle ~35-45% of equity volume for large caps
+    # Estimate based on multiple factors
+    base_dp = 32  # Base dark pool estimate
+    
+    # Adjust for institutional ownership
+    if activity['institutional_ownership'] > 80:
+        base_dp += 8  # Very high inst ownership = more dark pool
+    elif activity['institutional_ownership'] > 60:
+        base_dp += 5
+    elif activity['institutional_ownership'] > 40:
+        base_dp += 2
+    
+    # Adjust for market cap (larger caps = more dark pool)
+    market_cap = info.get('marketCap', 0)
+    if market_cap > 100e9:  # >$100B
+        base_dp += 5
+    elif market_cap > 10e9:  # >$10B
+        base_dp += 3
+    
+    # Adjust for average volume
+    if activity['avg_volume'] > 10000000:
+        base_dp += 3
+    elif activity['avg_volume'] > 1000000:
+        base_dp += 1
+    
+    activity['dark_pool_estimate'] = min(base_dp, 45)  # Cap at 45%
+    
+    # Dark pool sentiment inference
+    # High relative volume with price stability suggests dark pool accumulation
+    hist_1d = data.get('hist_1d')
+    if hist_1d is not None and len(hist_1d) > 1:
+        daily_range = (hist_1d['High'].max() - hist_1d['Low'].min()) / current_price * 100
+        if activity['relative_volume'] > 1.5 and daily_range < 2:
+            activity['dark_pool_sentiment'] = 'accumulation'
+            activity['whale_signals'].append(('🐋', 'High volume with low volatility - possible dark pool accumulation'))
+        elif activity['relative_volume'] > 1.5 and daily_range > 4:
+            activity['dark_pool_sentiment'] = 'distribution'
+            activity['whale_signals'].append(('🐋', 'High volume with high volatility - possible dark pool distribution'))
+    
+    # === SMART MONEY SCORE ===
+    smart_score = 50  # Start neutral
     
     # Major holders breakdown
     major_holders = data.get('major_holders')
@@ -1216,33 +1343,84 @@ def analyze_institutional_activity(data, current_price):
         activity['whale_signals'].append(('🟡', f'Low institutional ownership ({activity["institutional_ownership"]:.1f}%)'))
     
     if activity['insider_ownership'] > 20:
-        activity['whale_signals'].append(('🟢', f'High insider ownership ({activity["insider_ownership"]:.1f}%)'))
+        activity['whale_signals'].append(('🟢', f'High insider ownership ({activity["insider_ownership"]:.1f}%) - aligned interests'))
+        smart_score += 10
     
     # === SHORT INTEREST SIGNALS ===
     if activity['short_interest'] > 20:
-        activity['whale_signals'].append(('🔴', f'High short interest ({activity["short_interest"]:.1f}%) - potential squeeze or bearish'))
+        activity['whale_signals'].append(('🔴', f'High short interest ({activity["short_interest"]:.1f}%) - potential squeeze or bearish thesis'))
+        smart_score -= 5  # Could go either way
     elif activity['short_interest'] > 10:
         activity['whale_signals'].append(('🟡', f'Elevated short interest ({activity["short_interest"]:.1f}%)'))
     
     if activity['short_ratio'] > 5:
-        activity['whale_signals'].append(('🟡', f'High days-to-cover ({activity["short_ratio"]:.1f} days)'))
+        activity['whale_signals'].append(('🟡', f'High days-to-cover ({activity["short_ratio"]:.1f} days) - squeeze fuel if momentum shifts'))
+    
+    # === SQUEEZE POTENTIAL SIGNAL ===
+    if activity['squeeze_potential'] > 70:
+        activity['whale_signals'].append(('🚀', f'HIGH squeeze potential ({activity["squeeze_potential"]}%) - high SI + high DTC'))
+    elif activity['squeeze_potential'] > 50:
+        activity['whale_signals'].append(('🟡', f'Moderate squeeze potential ({activity["squeeze_potential"]}%)'))
     
     # === VOLUME SIGNALS ===
     if activity['relative_volume'] > 3:
-        activity['whale_signals'].append(('🔥', f'Extreme volume ({activity["relative_volume"]:.1f}x avg) - whale activity likely'))
+        activity['whale_signals'].append(('🔥', f'Extreme volume ({activity["relative_volume"]:.1f}x avg) - major institutional activity'))
+        smart_score += 15 if activity.get('dark_pool_sentiment') == 'accumulation' else -5
     elif activity['relative_volume'] > 2:
         activity['whale_signals'].append(('🟢', f'High relative volume ({activity["relative_volume"]:.1f}x avg)'))
+        smart_score += 5
     elif activity['relative_volume'] < 0.5:
-        activity['whale_signals'].append(('🟡', f'Low volume ({activity["relative_volume"]:.1f}x avg) - lack of interest'))
+        activity['whale_signals'].append(('🟡', f'Low volume ({activity["relative_volume"]:.1f}x avg) - lack of institutional interest'))
+        smart_score -= 5
     
-    # === OVERALL SIGNAL ===
-    bullish_signals = sum(1 for s in activity['whale_signals'] if s[0] == '🟢')
+    # === ACCUMULATION/DISTRIBUTION ===
+    hist_5d = data.get('hist_5d')
+    if hist_5d is not None and len(hist_5d) > 5:
+        # Simple A/D line approximation
+        closes = hist_5d['Close'].values
+        volumes = hist_5d['Volume'].values
+        highs = hist_5d['High'].values
+        lows = hist_5d['Low'].values
+        
+        ad_sum = 0
+        for i in range(len(closes)):
+            if highs[i] != lows[i]:
+                clv = ((closes[i] - lows[i]) - (highs[i] - closes[i])) / (highs[i] - lows[i])
+                ad_sum += clv * volumes[i]
+        
+        if ad_sum > 0:
+            activity['accumulation_distribution'] = 'accumulation'
+            if activity['relative_volume'] > 1.2:
+                activity['whale_signals'].append(('🟢', 'A/D line positive - accumulation phase'))
+                smart_score += 10
+        else:
+            activity['accumulation_distribution'] = 'distribution'
+            if activity['relative_volume'] > 1.2:
+                activity['whale_signals'].append(('🔴', 'A/D line negative - distribution phase'))
+                smart_score -= 10
+    
+    # === FINALIZE SMART MONEY SCORE ===
+    # Incorporate insider sentiment
+    if activity['insider_sentiment'] in ['bullish', 'strongly bullish']:
+        smart_score += 15
+    elif activity['insider_sentiment'] in ['bearish', 'strongly bearish']:
+        smart_score -= 10
+    
+    # Incorporate options sentiment
+    if activity['options_sentiment'] == 'bullish':
+        smart_score += 10
+    elif activity['options_sentiment'] == 'bearish':
+        smart_score -= 10
+    
+    activity['smart_money_score'] = max(0, min(100, smart_score))
+    
+    # === OVERALL SIGNAL (Enhanced) ===
+    bullish_signals = sum(1 for s in activity['whale_signals'] if s[0] in ['🟢', '🐋', '🚀'])
     bearish_signals = sum(1 for s in activity['whale_signals'] if s[0] == '🔴')
     fire_signals = sum(1 for s in activity['whale_signals'] if s[0] == '🔥')
     
-    # Fire signals are strong but need context
+    # Fire signals are strong but need context from price action
     if fire_signals > 0:
-        # High volume can be bullish or bearish - check price direction from data
         hist = data.get('hist_1d')
         if hist is not None and len(hist) > 1:
             first_close = hist['Close'].iloc[0]
@@ -1252,12 +1430,30 @@ def analyze_institutional_activity(data, current_price):
             elif price_change < -1:
                 bearish_signals += fire_signals
     
+    # Factor in smart money score
+    if activity['smart_money_score'] > 65:
+        bullish_signals += 1
+    elif activity['smart_money_score'] < 35:
+        bearish_signals += 1
+    
     if bullish_signals > bearish_signals + 1:
         activity['overall_signal'] = 'bullish'
     elif bearish_signals > bullish_signals + 1:
         activity['overall_signal'] = 'bearish'
     else:
         activity['overall_signal'] = 'neutral'
+    
+    # Set institutional momentum
+    if activity['overall_signal'] == 'bullish' and activity['smart_money_score'] > 60:
+        activity['institutional_momentum'] = 'strong_bullish'
+    elif activity['overall_signal'] == 'bullish':
+        activity['institutional_momentum'] = 'bullish'
+    elif activity['overall_signal'] == 'bearish' and activity['smart_money_score'] < 40:
+        activity['institutional_momentum'] = 'strong_bearish'
+    elif activity['overall_signal'] == 'bearish':
+        activity['institutional_momentum'] = 'bearish'
+    else:
+        activity['institutional_momentum'] = 'neutral'
     
     return activity
 
@@ -2356,16 +2552,19 @@ def create_chart(hist, symbol, tf="5D", show_ind=True, support=None, resistance=
     
     # Determine max range based on timeframe
     if tf in ['1D']:
-        max_range_pct = 8
+        max_range_pct = 12  # More lenient
     elif tf in ['5D']:
-        max_range_pct = 10
+        max_range_pct = 15  # More lenient
     else:
-        max_range_pct = 15
+        max_range_pct = 20  # More lenient
     
     # Clean the data using helper function
-    hist = clean_chart_data(hist, max_range_pct=max_range_pct)
+    try:
+        hist = clean_chart_data(hist, max_range_pct=max_range_pct)
+    except Exception:
+        pass  # Use original data if cleaning fails
     
-    if hist is None or len(hist) < 5:
+    if hist is None or len(hist) < 2:  # Reduced from 5 to 2
         return None
     
     # Determine number of subplot rows
@@ -2675,62 +2874,111 @@ def create_chart(hist, symbol, tf="5D", show_ind=True, support=None, resistance=
     return fig
 
 def clean_chart_data(hist, max_range_pct=10):
-    """Clean OHLC data to remove bad wicks and outliers."""
+    """Clean OHLC data to remove bad wicks and outliers.
+    
+    More lenient cleaning to ensure charts render for most tickers.
+    """
     if hist is None or hist.empty:
         return None
     
-    # Make a copy
-    hist = hist.copy()
-    
-    # Remove NaN
-    hist = hist.dropna(subset=['Open', 'High', 'Low', 'Close'])
-    
-    if len(hist) < 5:
-        return None
-    
-    # Remove invalid candles
-    hist = hist[hist['High'] >= hist['Low']]
-    hist = hist[(hist['High'] >= hist['Open']) & (hist['High'] >= hist['Close'])]
-    hist = hist[(hist['Low'] <= hist['Open']) & (hist['Low'] <= hist['Close'])]
-    
-    if len(hist) < 5:
-        return None
-    
-    # Filter excessive range candles
-    candle_range_pct = (hist['High'] - hist['Low']) / hist['Close'] * 100
-    valid_range = candle_range_pct <= max_range_pct
-    if valid_range.sum() >= len(hist) * 0.7:
-        hist = hist[valid_range]
-    
-    # IQR outlier removal
-    q1, q3 = hist['Close'].quantile(0.05), hist['Close'].quantile(0.95)
-    iqr = q3 - q1
-    price_valid = (hist['Close'] >= q1 - 2*iqr) & (hist['Close'] <= q3 + 2*iqr)
-    if price_valid.sum() >= len(hist) * 0.8:
-        hist = hist[price_valid]
-    
-    # Cap extreme wicks
-    for idx in hist.index:
-        body_high = max(hist.loc[idx, 'Open'], hist.loc[idx, 'Close'])
-        body_low = min(hist.loc[idx, 'Open'], hist.loc[idx, 'Close'])
-        body_size = body_high - body_low
-        max_wick = max(body_size * 3, hist.loc[idx, 'Close'] * 0.02)
+    try:
+        # Make a copy to avoid modifying original
+        hist = hist.copy()
         
-        if hist.loc[idx, 'High'] > body_high + max_wick:
-            hist.loc[idx, 'High'] = body_high + max_wick
-        if hist.loc[idx, 'Low'] < body_low - max_wick:
-            hist.loc[idx, 'Low'] = body_low - max_wick
-    
-    return hist if len(hist) >= 5 else None
+        # Remove rows with NaN in essential columns
+        essential_cols = ['Open', 'High', 'Low', 'Close']
+        for col in essential_cols:
+            if col not in hist.columns:
+                return None
+        
+        hist = hist.dropna(subset=essential_cols)
+        
+        if len(hist) < 2:
+            return hist if len(hist) > 0 else None
+        
+        # Remove obviously invalid candles (High < Low)
+        valid_hlc = hist['High'] >= hist['Low']
+        if valid_hlc.sum() > 0:
+            hist = hist[valid_hlc]
+        
+        if len(hist) < 2:
+            return hist if len(hist) > 0 else None
+        
+        # Only filter extreme range candles if we have enough data
+        if len(hist) >= 10:
+            # Calculate candle range as percentage of close price
+            close_prices = hist['Close'].replace(0, np.nan)  # Avoid division by zero
+            candle_range_pct = (hist['High'] - hist['Low']) / close_prices * 100
+            candle_range_pct = candle_range_pct.fillna(0)
+            
+            # Only filter if most candles are within normal range
+            valid_range = candle_range_pct <= max_range_pct
+            if valid_range.sum() >= len(hist) * 0.5:  # More lenient: 50% instead of 70%
+                hist = hist[valid_range]
+        
+        if len(hist) < 2:
+            return hist if len(hist) > 0 else None
+        
+        # IQR outlier removal - only if we have enough data points
+        if len(hist) >= 20:
+            try:
+                q1 = hist['Close'].quantile(0.02)  # More lenient: 2% instead of 5%
+                q3 = hist['Close'].quantile(0.98)  # More lenient: 98% instead of 95%
+                iqr = q3 - q1
+                if iqr > 0:
+                    price_valid = (hist['Close'] >= q1 - 3*iqr) & (hist['Close'] <= q3 + 3*iqr)  # 3x instead of 2x
+                    if price_valid.sum() >= len(hist) * 0.7:
+                        hist = hist[price_valid]
+            except Exception:
+                pass  # Skip IQR filtering if it fails
+        
+        # Cap extreme wicks - only for charts with enough data
+        if len(hist) >= 5:
+            try:
+                for idx in hist.index:
+                    open_price = hist.loc[idx, 'Open']
+                    close_price = hist.loc[idx, 'Close']
+                    high_price = hist.loc[idx, 'High']
+                    low_price = hist.loc[idx, 'Low']
+                    
+                    # Skip if any values are invalid
+                    if pd.isna(open_price) or pd.isna(close_price) or pd.isna(high_price) or pd.isna(low_price):
+                        continue
+                    if close_price <= 0:
+                        continue
+                    
+                    body_high = max(open_price, close_price)
+                    body_low = min(open_price, close_price)
+                    body_size = body_high - body_low
+                    
+                    # Allow larger wicks (5x body or 5% of price)
+                    max_wick = max(body_size * 5, close_price * 0.05)
+                    
+                    if high_price > body_high + max_wick:
+                        hist.loc[idx, 'High'] = body_high + max_wick
+                    if low_price < body_low - max_wick:
+                        hist.loc[idx, 'Low'] = max(body_low - max_wick, 0.01)  # Don't go below 0
+            except Exception:
+                pass  # Skip wick capping if it fails
+        
+        return hist if len(hist) >= 2 else None
+        
+    except Exception as e:
+        # If anything fails, return original data
+        return hist if hist is not None and len(hist) >= 2 else None
 
 def create_mini_chart(hist, symbol, show_volume=True):
     """Create a simplified mini chart for dashboard views."""
     if hist is None or hist.empty:
         return None
     
-    # Clean data using helper
-    hist = clean_chart_data(hist, max_range_pct=10)
-    if hist is None or len(hist) < 5:
+    # Clean data using helper - more lenient for mini charts
+    try:
+        hist = clean_chart_data(hist, max_range_pct=15)
+    except Exception:
+        pass  # Use original data if cleaning fails
+    
+    if hist is None or len(hist) < 2:  # Reduced from 5 to 2
         return None
     
     rows = 2 if show_volume else 1
@@ -2922,7 +3170,10 @@ def render_stock_report(symbol):
     ch_hist = data.get(tf_map.get(sel_tf, 'hist_5d'))
     if ch_hist is not None and not ch_hist.empty:
         fig = create_chart(ch_hist, symbol, sel_tf, show_ind, support_levels, resistance_levels)
-        st.plotly_chart(fig, use_container_width=True)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning(f"Unable to render chart for {symbol}. The data may be incomplete or contain invalid values.")
     
     # Support/Resistance Display
     sr_col1, sr_col2 = st.columns(2)
@@ -3394,12 +3645,14 @@ def render_stock_report(symbol):
     
     with dp_col1:
         dark_pool_est = inst_activity['dark_pool_estimate']
-        dp_color = '#a371f7'
+        dp_sentiment = inst_activity.get('dark_pool_sentiment', 'neutral')
+        dp_color = '#3fb950' if dp_sentiment == 'accumulation' else '#f85149' if dp_sentiment == 'distribution' else '#a371f7'
+        dp_label = '📈 Accum' if dp_sentiment == 'accumulation' else '📉 Distr' if dp_sentiment == 'distribution' else 'Est.'
         st.markdown(f"""
         <div class="metric-card" style="text-align: center; padding: 0.75rem;">
             <div style="color: {dp_color}; font-size: 1.3rem; font-weight: 700;">{dark_pool_est}%</div>
-            <div style="color: #8b949e; font-size: 0.7rem;">Est. Dark Pool Vol</div>
-            <div style="color: #6e7681; font-size: 0.6rem; font-style: italic;">~{dark_pool_est}% of volume</div>
+            <div style="color: #8b949e; font-size: 0.7rem;">Dark Pool Volume</div>
+            <div style="color: {dp_color}; font-size: 0.6rem; font-style: italic;">{dp_label}</div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -3437,11 +3690,78 @@ def render_stock_report(symbol):
         </div>
         """, unsafe_allow_html=True)
     
+    # NEW: Smart Money & Squeeze Potential Row
+    st.markdown("#### 🧠 Smart Money Indicators")
+    sm_col1, sm_col2, sm_col3, sm_col4 = st.columns(4)
+    
+    with sm_col1:
+        smart_score = inst_activity.get('smart_money_score', 50)
+        sm_color = '#3fb950' if smart_score > 60 else '#f85149' if smart_score < 40 else '#d29922'
+        sm_label = 'Bullish' if smart_score > 60 else 'Bearish' if smart_score < 40 else 'Neutral'
+        st.markdown(f"""
+        <div class="metric-card" style="text-align: center; padding: 0.75rem;">
+            <div style="color: {sm_color}; font-size: 1.3rem; font-weight: 700;">{smart_score}</div>
+            <div style="color: #8b949e; font-size: 0.7rem;">Smart Money Score</div>
+            <div style="color: {sm_color}; font-size: 0.6rem;">{sm_label}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with sm_col2:
+        squeeze = inst_activity.get('squeeze_potential', 0)
+        sq_color = '#f7931a' if squeeze > 70 else '#d29922' if squeeze > 40 else '#8b949e'
+        sq_label = '🚀 HIGH' if squeeze > 70 else 'Moderate' if squeeze > 40 else 'Low'
+        st.markdown(f"""
+        <div class="metric-card" style="text-align: center; padding: 0.75rem;">
+            <div style="color: {sq_color}; font-size: 1.3rem; font-weight: 700;">{squeeze}%</div>
+            <div style="color: #8b949e; font-size: 0.7rem;">Squeeze Potential</div>
+            <div style="color: {sq_color}; font-size: 0.6rem;">{sq_label}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with sm_col3:
+        ad_phase = inst_activity.get('accumulation_distribution', 'neutral')
+        ad_color = '#3fb950' if ad_phase == 'accumulation' else '#f85149' if ad_phase == 'distribution' else '#8b949e'
+        ad_icon = '📈' if ad_phase == 'accumulation' else '📉' if ad_phase == 'distribution' else '➡️'
+        st.markdown(f"""
+        <div class="metric-card" style="text-align: center; padding: 0.75rem;">
+            <div style="color: {ad_color}; font-size: 1.3rem; font-weight: 700;">{ad_icon}</div>
+            <div style="color: #8b949e; font-size: 0.7rem;">A/D Phase</div>
+            <div style="color: {ad_color}; font-size: 0.6rem;">{ad_phase.title()}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with sm_col4:
+        momentum = inst_activity.get('institutional_momentum', 'neutral')
+        mom_color = '#3fb950' if 'bullish' in momentum else '#f85149' if 'bearish' in momentum else '#8b949e'
+        mom_icon = '🟢' if 'bullish' in momentum else '🔴' if 'bearish' in momentum else '🟡'
+        mom_label = 'Strong' if 'strong' in momentum else 'Moderate' if momentum != 'neutral' else 'Neutral'
+        st.markdown(f"""
+        <div class="metric-card" style="text-align: center; padding: 0.75rem;">
+            <div style="color: {mom_color}; font-size: 1.3rem; font-weight: 700;">{mom_icon}</div>
+            <div style="color: #8b949e; font-size: 0.7rem;">Inst. Momentum</div>
+            <div style="color: {mom_color}; font-size: 0.6rem;">{mom_label}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     # Whale Activity Interpretation
     st.markdown("#### 📊 Institutional Flow Analysis")
     
     # Build interpretation based on signals
     interpretations = []
+    
+    # Smart money interpretation
+    smart_score = inst_activity.get('smart_money_score', 50)
+    if smart_score > 65:
+        interpretations.append(f"🧠 **Smart Money Bullish** (Score: {smart_score}): Multiple institutional indicators suggest accumulation. Whales appear to be building positions.")
+    elif smart_score < 35:
+        interpretations.append(f"🧠 **Smart Money Bearish** (Score: {smart_score}): Institutional indicators suggest distribution or avoidance. Exercise caution.")
+    
+    # Squeeze potential
+    squeeze = inst_activity.get('squeeze_potential', 0)
+    if squeeze > 70:
+        interpretations.append(f"🚀 **High Squeeze Potential** ({squeeze}%): High short interest + high days-to-cover creates explosive squeeze conditions if momentum turns positive.")
+    elif squeeze > 50:
+        interpretations.append(f"⚡ **Moderate Squeeze Risk** ({squeeze}%): Elevated short positioning could accelerate price moves in either direction.")
     
     if inst_activity['short_interest'] > 15:
         interpretations.append(f"⚠️ **High Short Interest** ({inst_activity['short_interest']:.1f}%): Significant bearish bets against this stock. Watch for short squeeze potential if positive catalysts emerge.")
@@ -3450,6 +3770,13 @@ def render_stock_report(symbol):
     
     if inst_activity['relative_volume'] > 2:
         interpretations.append(f"🔥 **Unusual Volume** ({inst_activity['relative_volume']:.1f}x avg): Heavy institutional activity detected. Large players are actively trading this name.")
+    
+    # A/D phase interpretation
+    ad_phase = inst_activity.get('accumulation_distribution', 'neutral')
+    if ad_phase == 'accumulation' and inst_activity['relative_volume'] > 1.2:
+        interpretations.append("📈 **Accumulation Phase**: Money flow analysis shows net buying pressure with institutional participation.")
+    elif ad_phase == 'distribution' and inst_activity['relative_volume'] > 1.2:
+        interpretations.append("📉 **Distribution Phase**: Money flow analysis indicates selling pressure - institutions may be reducing positions.")
     
     if inst_activity['insider_buy_count'] > inst_activity['insider_sell_count'] and inst_activity['insider_buy_count'] > 0:
         interpretations.append(f"✅ **Net Insider Buying**: Insiders have made {inst_activity['insider_buy_count']} purchase(s) vs {inst_activity['insider_sell_count']} sale(s). Management showing confidence.")
@@ -4050,7 +4377,11 @@ def main():
                         # Get S/R levels for chart
                         price = h['Close'].iloc[-1] if not h.empty else 0
                         support, resistance = calculate_support_resistance(h, price)
-                        st.plotly_chart(create_chart(h, n, "5D", False, support, resistance), use_container_width=True)
+                        chart_fig = create_chart(h, n, "5D", False, support, resistance)
+                        if chart_fig is not None:
+                            st.plotly_chart(chart_fig, use_container_width=True)
+                        else:
+                            st.info(f"Chart unavailable for {n}")
     
     with tabs[2]:
         st.markdown("### 📊 Stocks")
@@ -4218,7 +4549,10 @@ def main():
                     price = h['Close'].iloc[-1]
                     support, resistance = calculate_support_resistance(h, price)
                     fig = create_chart(h, sec_info['symbol'], "5D", False, support, resistance)
-                    st.plotly_chart(fig, use_container_width=True)
+                    if fig is not None:
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("Chart data unavailable")
         
         st.markdown("### 📋 Top Holdings")
         st.markdown(f"<p style='color: #8b949e; font-size: 0.8rem;'>Click any stock for detailed analysis</p>", unsafe_allow_html=True)
