@@ -7452,15 +7452,15 @@ def main():
     
     # === RESEARCH TAB ===
     with tabs[7]:
-        st.markdown("### 🔍 Research & URL Analysis")
-        st.markdown("<p style='color: #8b949e; font-size: 0.85rem;'>Paste any financial news article URL for institutional-grade macro analysis</p>", unsafe_allow_html=True)
+        st.markdown("### 🔍 Research & Article Intelligence")
+        st.markdown("<p style='color: #8b949e; font-size: 0.85rem;'>Institutional-grade financial article decomposition — paste any URL for hedge fund-level analysis</p>", unsafe_allow_html=True)
         
         url = st.text_input("Article URL:", placeholder="https://www.reuters.com/... or https://www.wsj.com/...", key="url_in")
         
         if url:
-            with st.spinner("Extracting and analyzing article content..."):
+            with st.spinner("Extracting article and running institutional analysis pipeline..."):
                 try:
-                    # Fetch article
+                    # === STAGE 1: ARTICLE EXTRACTION ===
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -7469,262 +7469,566 @@ def main():
                     resp = requests.get(url, headers=headers, timeout=20)
                     soup = BeautifulSoup(resp.content, 'html.parser')
                     
-                    # Remove non-content elements
                     for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'advertisement', 'iframe', 'noscript']):
                         tag.decompose()
                     
-                    # Extract title
                     title = soup.title.string if soup.title else urlparse(url).netloc
-                    title = title.strip()[:150] if title else "Article Analysis"
+                    title = title.strip()[:200] if title else "Article Analysis"
                     
-                    # Extract main content
+                    # Extract author
+                    author = ""
+                    author_meta = soup.find('meta', attrs={'name': re.compile(r'author', re.I)})
+                    if author_meta:
+                        author = author_meta.get('content', '')
+                    if not author:
+                        author_tag = soup.find(class_=re.compile(r'author|byline', re.I))
+                        if author_tag:
+                            author = author_tag.get_text(strip=True)[:80]
+                    
+                    # Extract publish date
+                    pub_date = ""
+                    date_meta = soup.find('meta', attrs={'property': re.compile(r'published_time|date', re.I)})
+                    if date_meta:
+                        pub_date = date_meta.get('content', '')[:20]
+                    if not pub_date:
+                        time_tag = soup.find('time')
+                        if time_tag:
+                            pub_date = time_tag.get('datetime', time_tag.get_text(strip=True))[:20]
+                    
                     article_text = ""
-                    
-                    # Try to find article body
                     article_tags = soup.find_all(['article', 'main', 'div'], class_=lambda x: x and any(c in str(x).lower() for c in ['article', 'content', 'story', 'post', 'entry']))
                     if article_tags:
                         article_text = article_tags[0].get_text(separator='\n', strip=True)
                     
                     if not article_text or len(article_text) < 500:
-                        # Fallback to paragraphs
                         paragraphs = soup.find_all('p')
-                        article_text = '\n'.join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 50])
+                        article_text = '\n'.join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 40])
                     
                     if not article_text:
                         article_text = soup.get_text(separator='\n', strip=True)
                     
-                    # Limit text length for processing
-                    article_text = article_text[:15000]
+                    article_text = article_text[:18000]
                     text_lower = article_text.lower()
+                    sentences = [s.strip() for s in article_text.replace('\n', ' ').split('.') if 20 < len(s.strip()) < 500]
+                    word_count = len(article_text.split())
                     
-                    # === COMPREHENSIVE ANALYSIS ===
-                    
-                    # 1. Extract key financial data points
-                    numbers_with_context = []
-                    sentences = article_text.replace('\n', ' ').split('.')
-                    
-                    for sent in sentences:
-                        sent = sent.strip()
-                        if len(sent) < 20 or len(sent) > 400:
-                            continue
-                        
-                        # Look for sentences with meaningful financial data
-                        has_number = bool(re.search(r'\d+\.?\d*\s*(%|percent|billion|million|trillion|bps|basis points)', sent, re.IGNORECASE))
-                        has_financial_term = any(term in sent.lower() for term in ['revenue', 'earnings', 'profit', 'loss', 'gdp', 'inflation', 'rate', 'growth', 'decline', 'increase', 'decrease', 'forecast', 'estimate', 'target', 'outlook'])
-                        has_market_term = any(term in sent.lower() for term in ['stock', 'bond', 'yield', 'index', 'market', 'trade', 'investor', 'fed', 'treasury', 'dollar', 'oil', 'gold'])
-                        
-                        if has_number and (has_financial_term or has_market_term):
-                            numbers_with_context.append(sent)
-                    
-                    # 2. Identify macro themes
-                    macro_themes = []
-                    theme_keywords = {
-                        'Monetary Policy': ['fed', 'federal reserve', 'interest rate', 'rate cut', 'rate hike', 'powell', 'fomc', 'monetary policy', 'hawkish', 'dovish', 'quantitative'],
-                        'Inflation': ['inflation', 'cpi', 'pce', 'consumer price', 'price pressure', 'disinflation', 'deflation', 'core inflation'],
-                        'Economic Growth': ['gdp', 'economic growth', 'recession', 'expansion', 'soft landing', 'hard landing', 'employment', 'jobs', 'unemployment', 'labor market'],
-                        'Geopolitics': ['tariff', 'trade war', 'china', 'russia', 'ukraine', 'sanctions', 'geopolitical', 'conflict', 'tensions', 'nato'],
-                        'Corporate Earnings': ['earnings', 'revenue', 'profit', 'guidance', 'beat', 'miss', 'eps', 'quarter', 'fiscal'],
-                        'Technology/AI': ['artificial intelligence', ' ai ', 'nvidia', 'semiconductor', 'chip', 'tech sector', 'mega-cap', 'magnificent'],
-                        'Energy': ['oil', 'crude', 'opec', 'natural gas', 'energy', 'petroleum', 'brent', 'wti'],
-                        'Banking/Financial': ['bank', 'credit', 'lending', 'loan', 'financial sector', 'yield curve', 'treasury', 'bond'],
-                        'Housing/Real Estate': ['housing', 'real estate', 'mortgage', 'home sales', 'construction', 'property'],
-                        'Consumer': ['consumer', 'retail', 'spending', 'sentiment', 'confidence', 'discretionary'],
+                    # === STAGE 2: DEEP MACRO THEME EXTRACTION ===
+                    theme_taxonomy = {
+                        'Monetary Policy & Central Banks': {
+                            'keywords': ['fed', 'federal reserve', 'interest rate', 'rate cut', 'rate hike', 'powell', 'fomc', 'monetary policy', 'hawkish', 'dovish', 'quantitative', 'tightening', 'easing', 'neutral rate', 'terminal rate', 'dot plot', 'balance sheet', 'ecb', 'boj', 'pboc', 'bank of england'],
+                            'icon': '🏛️',
+                            'asset_impact': {'Equities': 'Duration-sensitive growth stocks inversely correlated with rate expectations', 'Fixed Income': 'Front-end yields directly responsive; curve shape reflects policy path expectations', 'FX': 'Rate differentials drive USD direction; carry trade dynamics shift', 'Commodities': 'Gold inversely correlated with real rates; oil affected through demand channel'},
+                        },
+                        'Inflation & Price Stability': {
+                            'keywords': ['inflation', 'cpi', 'pce', 'consumer price', 'price pressure', 'disinflation', 'deflation', 'core inflation', 'wage growth', 'unit labor cost', 'breakeven', 'tips', 'sticky inflation', 'transitory', 'shelter', 'services inflation'],
+                            'icon': '📈',
+                            'asset_impact': {'Equities': 'Margin compression risk for companies without pricing power; TIPS as hedge', 'Fixed Income': 'Nominal yields rise with inflation expectations; real yield curve steepens', 'FX': 'Inflation differentials affect relative currency valuation', 'Commodities': 'Commodity producers benefit as natural inflation hedge'},
+                        },
+                        'Economic Growth & Cycle': {
+                            'keywords': ['gdp', 'economic growth', 'recession', 'expansion', 'soft landing', 'hard landing', 'employment', 'jobs', 'unemployment', 'labor market', 'nonfarm', 'payrolls', 'initial claims', 'ism', 'pmi', 'leading indicators', 'business cycle', 'output gap'],
+                            'icon': '📊',
+                            'asset_impact': {'Equities': 'Cyclicals outperform in expansion; defensives lead in contraction', 'Fixed Income': 'Long-duration bonds rally on growth slowdown; credit spreads widen in recession', 'FX': 'Growth outperformance drives currency strength via capital flows', 'Commodities': 'Industrial commodities (copper, oil) track global growth trajectory'},
+                        },
+                        'Geopolitics & Trade Policy': {
+                            'keywords': ['tariff', 'trade war', 'china', 'russia', 'ukraine', 'sanctions', 'geopolitical', 'conflict', 'tensions', 'nato', 'export controls', 'decoupling', 'friendshoring', 'supply chain', 'national security', 'executive order', 'embargo'],
+                            'icon': '🌍',
+                            'asset_impact': {'Equities': 'Supply chain disruption reprices multi-national margins; defense sector benefits', 'Fixed Income': 'Flight-to-quality bids up Treasuries; EM spreads widen on risk aversion', 'FX': 'Safe-haven currencies (USD, CHF, JPY) strengthen; EM FX weakens', 'Commodities': 'Energy and agricultural commodities spike on supply disruption risk'},
+                        },
+                        'Corporate Earnings & Guidance': {
+                            'keywords': ['earnings', 'revenue', 'profit', 'guidance', 'beat', 'miss', 'eps', 'quarter', 'fiscal', 'margin', 'operating income', 'free cash flow', 'capex', 'buyback', 'dividend', 'forward guidance', 'estimate revision'],
+                            'icon': '💰',
+                            'asset_impact': {'Equities': 'Earnings revisions drive sector rotation; guidance more important than beat/miss', 'Fixed Income': 'Corporate credit spreads tighten on strong earnings; default risk falls', 'FX': 'Repatriation flows from strong US earnings support USD', 'Commodities': 'Capex guidance signals future commodity demand trajectory'},
+                        },
+                        'Technology & AI': {
+                            'keywords': ['artificial intelligence', ' ai ', 'nvidia', 'semiconductor', 'chip', 'tech sector', 'mega-cap', 'magnificent', 'data center', 'cloud', 'machine learning', 'gpu', 'hyperscaler', 'capex cycle', 'digital', 'automation'],
+                            'icon': '🤖',
+                            'asset_impact': {'Equities': 'Semis lead AI capex cycle; power/utilities as derivative plays; valuation risk in crowded trades', 'Fixed Income': 'Tech capex funded by corporate debt issuance; IG spreads affected', 'FX': 'US tech dominance supports structural USD demand from foreign investment', 'Commodities': 'Power demand (natural gas, uranium) rises with data center buildout'},
+                        },
+                        'Energy & Commodities': {
+                            'keywords': ['oil', 'crude', 'opec', 'natural gas', 'energy', 'petroleum', 'brent', 'wti', 'lng', 'refinery', 'production cut', 'shale', 'renewable', 'transition', 'carbon'],
+                            'icon': '⛽',
+                            'asset_impact': {'Equities': 'E&P and oilfield services direct beneficiaries; airlines/transports inversely affected', 'Fixed Income': 'Energy HY credit tied to commodity prices; sovereign risk in petrostates', 'FX': 'CAD, NOK, RUB correlated with oil; JPY weakened by energy import costs', 'Commodities': 'OPEC+ decisions drive crude; natural gas follows weather and LNG export capacity'},
+                        },
+                        'Financial Sector & Credit': {
+                            'keywords': ['bank', 'credit', 'lending', 'loan', 'financial sector', 'yield curve', 'treasury', 'bond', 'spread', 'default', 'delinquency', 'npl', 'net interest margin', 'liquidity', 'capital ratio', 'stress test', 'fdic'],
+                            'icon': '🏦',
+                            'asset_impact': {'Equities': 'Bank stocks track NIM and credit quality; insurance benefits from higher rates', 'Fixed Income': 'Credit spreads signal systemic risk appetite; BBB cliff-risk in downturn', 'FX': 'Banking stress drives safe-haven flows; contagion risk reprices EM', 'Commodities': 'Credit tightening reduces speculative commodity positioning'},
+                        },
+                        'Fiscal Policy & Government': {
+                            'keywords': ['fiscal', 'government spending', 'deficit', 'debt ceiling', 'budget', 'stimulus', 'infrastructure', 'tax', 'treasury auction', 'issuance', 'sovereign', 'congress', 'legislation'],
+                            'icon': '🏛️',
+                            'asset_impact': {'Equities': 'Infrastructure/defense spending benefits specific sectors; tax changes affect after-tax earnings', 'Fixed Income': 'Supply concerns from deficit spending; auction tail risk; term premium', 'FX': 'Twin deficit concerns weigh on USD long-term; fiscal stimulus near-term positive', 'Commodities': 'Infrastructure spending drives copper, steel demand'},
+                        },
+                        'Housing & Real Estate': {
+                            'keywords': ['housing', 'real estate', 'mortgage', 'home sales', 'construction', 'property', 'reit', 'commercial real estate', 'cre', 'vacancy', 'rent', 'homebuilder'],
+                            'icon': '🏠',
+                            'asset_impact': {'Equities': 'Homebuilders, mortgage REITs directly affected; consumer wealth effect', 'Fixed Income': 'MBS spreads and prepayment risk; CRE exposure in regional bank portfolios', 'FX': 'Housing weakness signals broader economic slowing', 'Commodities': 'Construction activity drives lumber, copper demand'},
+                        },
+                        'Consumer & Retail': {
+                            'keywords': ['consumer', 'retail', 'spending', 'sentiment', 'confidence', 'discretionary', 'staples', 'e-commerce', 'holiday', 'same-store', 'foot traffic', 'credit card'],
+                            'icon': '🛒',
+                            'asset_impact': {'Equities': 'Consumer discretionary vs. staples rotation signals cycle positioning', 'Fixed Income': 'Consumer credit quality affects ABS and retail corporate bonds', 'FX': 'Consumer spending differential affects relative growth and currency', 'Commodities': 'Gasoline demand, agricultural commodities track consumer behavior'},
+                        },
                     }
                     
-                    for theme, keywords in theme_keywords.items():
-                        count = sum(1 for kw in keywords if kw in text_lower)
-                        if count >= 2:
-                            macro_themes.append((theme, count))
+                    detected_themes = []
+                    for theme_name, theme_data in theme_taxonomy.items():
+                        hit_count = sum(1 for kw in theme_data['keywords'] if kw in text_lower)
+                        # Weight multi-word phrases higher
+                        phrase_hits = sum(2 for kw in theme_data['keywords'] if ' ' in kw and kw in text_lower)
+                        total_score = hit_count + phrase_hits
+                        if total_score >= 3:
+                            detected_themes.append({
+                                'name': theme_name,
+                                'score': total_score,
+                                'icon': theme_data['icon'],
+                                'asset_impact': theme_data['asset_impact'],
+                                'relevance': 'Primary' if total_score >= 6 else 'Secondary'
+                            })
                     
-                    macro_themes.sort(key=lambda x: x[1], reverse=True)
-                    primary_themes = [t[0] for t in macro_themes[:4]]
+                    detected_themes.sort(key=lambda x: x['score'], reverse=True)
+                    primary_themes = [t for t in detected_themes if t['relevance'] == 'Primary']
+                    secondary_themes = [t for t in detected_themes if t['relevance'] == 'Secondary']
                     
-                    # 3. Sentiment analysis with more nuance
-                    bullish_words = ['surge', 'rally', 'beat', 'upgrade', 'record', 'strong', 'growth', 'buy', 'positive', 'optimism', 'bullish', 'outperform', 'accelerate', 'exceed', 'boom', 'soar', 'gain', 'advance', 'recovery', 'upside']
-                    bearish_words = ['drop', 'fall', 'miss', 'downgrade', 'weak', 'cut', 'sell', 'warning', 'decline', 'pessimism', 'bearish', 'underperform', 'slow', 'concern', 'risk', 'crash', 'plunge', 'fear', 'recession', 'downside', 'slump']
+                    # === STAGE 3: ADVANCED SENTIMENT ENGINE ===
+                    # Weighted sentiment with context awareness
+                    strong_bull = ['surge', 'soar', 'record high', 'blowout', 'crushing estimates', 'outperform', 'breakthrough', 'accelerating', 'robust', 'resilient']
+                    moderate_bull = ['rally', 'beat', 'upgrade', 'strong', 'growth', 'positive', 'optimism', 'bullish', 'exceed', 'gain', 'advance', 'recovery', 'upside', 'momentum', 'tailwind', 'constructive']
+                    strong_bear = ['crash', 'plunge', 'collapse', 'crisis', 'default', 'bankruptcy', 'capitulation', 'contagion', 'meltdown', 'freefall']
+                    moderate_bear = ['drop', 'fall', 'miss', 'downgrade', 'weak', 'cut', 'sell', 'warning', 'decline', 'concern', 'risk', 'fear', 'slump', 'headwind', 'deteriorating', 'downside', 'cautious']
+                    negation_words = ['not', 'no', "n't", 'without', 'despite', 'unlikely', 'fail', 'lack']
                     
-                    bull_count = sum(1 for w in bullish_words if w in text_lower)
-                    bear_count = sum(1 for w in bearish_words if w in text_lower)
+                    bull_score = 0
+                    bear_score = 0
+                    bull_signals = []
+                    bear_signals = []
                     
-                    if bull_count > bear_count * 1.5:
+                    for sent in sentences:
+                        sent_lower = sent.lower()
+                        has_negation = any(neg in sent_lower.split() for neg in negation_words)
+                        
+                        for word in strong_bull:
+                            if word in sent_lower:
+                                if has_negation:
+                                    bear_score += 1
+                                    bear_signals.append(f"Negated bullish: \"{word}\" → bearish context")
+                                else:
+                                    bull_score += 3
+                                    bull_signals.append(f"Strong: \"{word}\"")
+                        
+                        for word in moderate_bull:
+                            if word in sent_lower:
+                                if has_negation:
+                                    bear_score += 0.5
+                                else:
+                                    bull_score += 1
+                                    if len(bull_signals) < 8:
+                                        bull_signals.append(f"\"{word}\"")
+                        
+                        for word in strong_bear:
+                            if word in sent_lower:
+                                if has_negation:
+                                    bull_score += 1
+                                    bull_signals.append(f"Negated bearish: \"{word}\" → bullish context")
+                                else:
+                                    bear_score += 3
+                                    bear_signals.append(f"Strong: \"{word}\"")
+                        
+                        for word in moderate_bear:
+                            if word in sent_lower:
+                                if has_negation:
+                                    bull_score += 0.5
+                                else:
+                                    bear_score += 1
+                                    if len(bear_signals) < 8:
+                                        bear_signals.append(f"\"{word}\"")
+                    
+                    total_signal = bull_score + bear_score
+                    if total_signal > 0:
+                        bull_pct = bull_score / total_signal * 100
+                        bear_pct = bear_score / total_signal * 100
+                    else:
+                        bull_pct = bear_pct = 50
+                    
+                    net_score = bull_score - bear_score
+                    if net_score > 10:
+                        sentiment = "Strongly Bullish"
+                        sentiment_color = "#00C805"
+                        sentiment_icon = "🟢"
+                    elif net_score > 4:
                         sentiment = "Bullish"
                         sentiment_color = "#3fb950"
-                    elif bear_count > bull_count * 1.5:
+                        sentiment_icon = "🟢"
+                    elif net_score > 1:
+                        sentiment = "Lean Bullish"
+                        sentiment_color = "#7ee787"
+                        sentiment_icon = "🔵"
+                    elif net_score < -10:
+                        sentiment = "Strongly Bearish"
+                        sentiment_color = "#FF3B30"
+                        sentiment_icon = "🔴"
+                    elif net_score < -4:
                         sentiment = "Bearish"
                         sentiment_color = "#f85149"
-                    elif bull_count > bear_count:
-                        sentiment = "Moderately Bullish"
-                        sentiment_color = "#7ee787"
-                    elif bear_count > bull_count:
-                        sentiment = "Moderately Bearish"
+                        sentiment_icon = "🔴"
+                    elif net_score < -1:
+                        sentiment = "Lean Bearish"
                         sentiment_color = "#ffa198"
+                        sentiment_icon = "🟡"
                     else:
                         sentiment = "Neutral"
                         sentiment_color = "#d29922"
+                        sentiment_icon = "⚪"
                     
-                    # 4. Extract mentioned tickers
+                    confidence = 'High' if abs(net_score) > 8 and total_signal > 15 else 'Medium' if abs(net_score) > 3 else 'Low'
+                    
+                    # === STAGE 4: FINANCIAL DATA EXTRACTION ===
+                    data_points = []
+                    
+                    for sent in sentences:
+                        sent_stripped = sent.strip()
+                        if len(sent_stripped) < 25:
+                            continue
+                        
+                        has_number = bool(re.search(r'\d+\.?\d*\s*(%|percent|billion|million|trillion|bps|basis points|pp)', sent_stripped, re.IGNORECASE))
+                        has_dollar = bool(re.search(r'\$\d+', sent_stripped))
+                        has_financial = any(t in sent_stripped.lower() for t in ['revenue', 'earnings', 'profit', 'loss', 'gdp', 'inflation', 'rate', 'growth', 'decline', 'forecast', 'estimate', 'target', 'outlook', 'yield', 'deficit', 'surplus', 'margin', 'spread', 'return', 'payout', 'capex', 'sales'])
+                        has_market = any(t in sent_stripped.lower() for t in ['stock', 'bond', 'yield', 'index', 'market', 'trade', 'investor', 'fed', 'treasury', 'dollar', 'oil', 'gold', 'price', 'valuation', 'volume'])
+                        
+                        # Categorize data points
+                        if has_number or has_dollar:
+                            if has_financial or has_market:
+                                # Determine category
+                                dp_lower = sent_stripped.lower()
+                                if any(w in dp_lower for w in ['earnings', 'eps', 'revenue', 'profit', 'margin', 'income']):
+                                    cat = '💰 Earnings'
+                                elif any(w in dp_lower for w in ['gdp', 'growth', 'employment', 'jobs', 'payroll', 'unemployment']):
+                                    cat = '📊 Economic'
+                                elif any(w in dp_lower for w in ['inflation', 'cpi', 'pce', 'price']):
+                                    cat = '📈 Inflation'
+                                elif any(w in dp_lower for w in ['rate', 'yield', 'treasury', 'fed', 'bond']):
+                                    cat = '🏛️ Rates'
+                                elif any(w in dp_lower for w in ['stock', 'index', 'market', 'valuation']):
+                                    cat = '📉 Markets'
+                                elif any(w in dp_lower for w in ['oil', 'gold', 'commodity', 'energy']):
+                                    cat = '⛽ Commodities'
+                                else:
+                                    cat = '📋 Other'
+                                
+                                data_points.append({'text': sent_stripped, 'category': cat})
+                    
+                    # Deduplicate similar data points
+                    seen_keys = set()
+                    unique_data_points = []
+                    for dp in data_points:
+                        # Simple dedup: first 60 chars
+                        key = dp['text'][:60].lower()
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            unique_data_points.append(dp)
+                    data_points = unique_data_points[:10]
+                    
+                    # === STAGE 5: TICKER & ENTITY EXTRACTION ===
                     potential_tickers = set(re.findall(r'\b([A-Z]{2,5})\b', article_text))
-                    # Filter to known tickers
-                    all_known_tickers = set(OPTIONS_UNIVERSE) | set(['SPY', 'QQQ', 'IWM', 'DIA', 'VIX', 'TLT', 'GLD', 'USO', 'XLF', 'XLE', 'XLK', 'XLV', 'XLI', 'XLP', 'XLY', 'XLB', 'XLU', 'XLRE'])
-                    mentioned_tickers = list(potential_tickers.intersection(all_known_tickers))[:8]
+                    common_words = {'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS', 'ONE', 'OUR', 'OUT', 'HAS', 'HIS', 'HOW', 'ITS', 'MAY', 'NEW', 'NOW', 'OLD', 'SEE', 'WAY', 'WHO', 'DID', 'GET', 'HIM', 'LET', 'SAY', 'SHE', 'TOO', 'USE', 'CEO', 'CFO', 'GDP', 'CPI', 'PCE', 'PMI', 'ISM', 'IPO', 'ETF', 'IMF', 'ECB', 'BOJ', 'SEC', 'FDA', 'EPA', 'AI', 'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'BPS', 'EST', 'PER', 'TWO', 'YET', 'FED', 'API', 'USB', 'EIA', 'SAID', 'ALSO', 'HAVE', 'BEEN', 'MORE', 'FROM', 'WILL', 'THEY', 'WITH', 'THAT', 'THIS', 'WHAT', 'WHEN', 'THAN', 'EACH', 'MAKE', 'LIKE', 'LONG', 'MUCH', 'JUST', 'OVER', 'SUCH', 'TAKE', 'YEAR', 'THEM', 'SOME', 'TIME', 'VERY', 'MADE', 'COME', 'LAST', 'INTO', 'BACK', 'ONLY', 'EVEN', 'MOST', 'ALSO', 'HERE', 'HIGH', 'NEXT', 'AWAY', 'KEEP', 'PART', 'PAST', 'HALF', 'WELL', 'AMID', 'NEAR', 'RISK', 'DEAL'}
+                    all_known_tickers = set(OPTIONS_UNIVERSE) | set(['SPY', 'QQQ', 'IWM', 'DIA', 'VIX', 'TLT', 'GLD', 'USO', 'XLF', 'XLE', 'XLK', 'XLV', 'XLI', 'XLP', 'XLY', 'XLB', 'XLU', 'XLRE', 'HYG', 'LQD', 'TIP', 'SHY', 'AGG', 'BND', 'EEM', 'EFA', 'FXI', 'RSX', 'ARKK', 'ARKG', 'SOXL', 'TQQQ'])
+                    mentioned_tickers = sorted(list((potential_tickers - common_words).intersection(all_known_tickers)))[:10]
                     
-                    # 5. Identify key entities (companies, people, organizations)
-                    key_entities = []
-                    entity_patterns = [
-                        (r'(?:CEO|CFO|Chairman|President|Secretary|Chair)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)', 'Executive'),
-                        (r'(?:Federal Reserve|Fed|ECB|BOJ|PBOC|Treasury|IMF|World Bank)', 'Institution'),
+                    # Extract named entities (people + roles)
+                    people_patterns = [
+                        (r"(?:CEO|Chief Executive|Chief Executive Officer)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", "CEO"),
+                        (r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+),?\s+(?:the\s+)?(?:CEO|chief executive)", "CEO"),
+                        (r"(?:CFO|Chief Financial Officer)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", "CFO"),
+                        (r"(?:Chairman|Chair|Chairwoman)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", "Chair"),
+                        (r"(?:President|Secretary|Governor|Director)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", "Official"),
+                        (r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+(?:said|told|noted|warned|stated|argued|suggested|emphasized|indicated)", "Quoted"),
                     ]
                     
-                    # 6. Determine market implications
+                    key_people = []
+                    seen_people = set()
+                    for pattern, role in people_patterns:
+                        matches = re.findall(pattern, article_text)
+                        for m in matches:
+                            name = m.strip()
+                            if name not in seen_people and len(name) > 4 and len(name) < 40:
+                                key_people.append({'name': name, 'role': role})
+                                seen_people.add(name)
+                    key_people = key_people[:6]
+                    
+                    # === STAGE 6: MARKET IMPLICATION ENGINE ===
+                    # Generate specific, actionable cross-asset implications
                     implications = []
                     
-                    if 'rate cut' in text_lower or 'dovish' in text_lower:
-                        implications.append("Potential tailwind for risk assets and growth stocks if rate cuts materialize")
-                    if 'rate hike' in text_lower or 'hawkish' in text_lower:
-                        implications.append("Rising rate expectations may pressure equity valuations, particularly in growth sectors")
-                    if 'inflation' in text_lower and ('higher' in text_lower or 'rise' in text_lower or 'increase' in text_lower):
-                        implications.append("Persistent inflation concerns could delay monetary easing and impact fixed income")
-                    if 'recession' in text_lower or 'slowdown' in text_lower:
-                        implications.append("Growth concerns warrant defensive positioning and quality factor exposure")
-                    if 'tariff' in text_lower or 'trade war' in text_lower:
-                        implications.append("Trade policy uncertainty may increase volatility and impact global supply chains")
-                    if 'earnings beat' in text_lower or 'strong results' in text_lower:
-                        implications.append("Positive earnings momentum could support continued equity market strength")
-                    if 'guidance' in text_lower and ('lower' in text_lower or 'cut' in text_lower or 'reduce' in text_lower):
-                        implications.append("Weakening corporate guidance signals potential earnings revisions ahead")
-                    if 'ai' in text_lower or 'artificial intelligence' in text_lower:
-                        implications.append("AI theme continues to drive sector rotation toward technology and semiconductors")
+                    # Monetary policy implications
+                    if any(kw in text_lower for kw in ['rate cut', 'dovish', 'easing']):
+                        implications.append({'signal': 'Dovish pivot', 'equities': 'Growth > Value rotation; small caps benefit from lower financing costs', 'fixed_income': 'Bull steepener — front-end rallies faster than long-end', 'fx': 'USD weakens; EM FX and carry trades benefit', 'commodities': 'Gold rallies on lower real rates; oil supported by demand outlook', 'trade_idea': 'Long QQQ/IWM, Long TLT, Short DXY'})
+                    if any(kw in text_lower for kw in ['rate hike', 'hawkish', 'tightening', 'higher for longer']):
+                        implications.append({'signal': 'Hawkish surprise', 'equities': 'Growth stocks de-rate; financials benefit from steeper curve', 'fixed_income': 'Bear flattener — 2Y sells off; duration risk elevated', 'fx': 'USD strengthens; EM currencies under pressure', 'commodities': 'Gold weakens; oil mixed (demand concern vs. supply)', 'trade_idea': 'Long XLF, Short TLT, Long UUP'})
+                    
+                    # Inflation implications
+                    if any(kw in text_lower for kw in ['inflation higher', 'cpi above', 'price pressure', 'sticky inflation', 'hot cpi']):
+                        implications.append({'signal': 'Inflation surprise', 'equities': 'Real assets and pricing-power names outperform; long duration growth lags', 'fixed_income': 'TIPS outperform nominals; breakevens widen; curve bear flattens', 'fx': 'USD initially strengthens on rate repricing; gold bid as inflation hedge', 'commodities': 'Broad commodity strength; energy and agriculture lead', 'trade_idea': 'Long XLE/XLB, Long GLD, Short long-duration bonds'})
+                    if any(kw in text_lower for kw in ['disinflation', 'inflation falling', 'cpi below', 'deflation', 'prices declining']):
+                        implications.append({'signal': 'Disinflation confirmation', 'equities': 'Growth re-rates higher; consumer discretionary benefits from real income gains', 'fixed_income': 'Duration rally; curve bull steepens as easing priced in', 'fx': 'USD weakens on rate-cut expectations; AUD/NZD benefit', 'commodities': 'Mixed — gold up on easing bets, industrial metals soft on demand worry', 'trade_idea': 'Long QQQ/XLY, Long TLT, Short USD'})
+                    
+                    # Growth implications
+                    if any(kw in text_lower for kw in ['recession', 'hard landing', 'contraction', 'significant slowdown']):
+                        implications.append({'signal': 'Recession risk elevated', 'equities': 'Rotate to quality/low-vol; defensives (XLU, XLP, XLV) outperform cyclicals', 'fixed_income': 'Aggressive bull flattener; credit spreads widen — HY vulnerable', 'fx': 'Classic risk-off: USD/JPY/CHF strengthen; AUD/CAD weaken', 'commodities': 'Oil drops on demand destruction; gold rallies as safe haven', 'trade_idea': 'Long XLU/XLP, Long TLT, Short HYG, Long GLD'})
+                    if any(kw in text_lower for kw in ['soft landing', 'resilient economy', 'strong employment', 'robust growth', 'goldilocks']):
+                        implications.append({'signal': 'Soft landing narrative', 'equities': 'Broad equity rally; cyclicals and small caps catch up to mega-cap', 'fixed_income': 'Mild curve steepening; credit tightens — risk-on', 'fx': 'USD stable; EM FX supported by global growth', 'commodities': 'Copper and oil bid on growth; gold neutral', 'trade_idea': 'Long IWM, Long XLI/XLB, Long EEM'})
+                    
+                    # Geopolitical implications
+                    if any(kw in text_lower for kw in ['tariff', 'trade war', 'sanctions', 'export controls', 'embargo']):
+                        implications.append({'signal': 'Trade/sanctions escalation', 'equities': 'Supply-chain-exposed names de-rate; domestic-focused and defense benefit', 'fixed_income': 'Flight to quality; Treasuries rally; EM sovereign spreads widen', 'fx': 'USD bid as safe haven; CNY/KRW under pressure', 'commodities': 'Supply disruption premium in energy/metals; agricultural volatility', 'trade_idea': 'Long XLI (defense), Long GLD/TLT, Short EEM/FXI'})
+                    if any(kw in text_lower for kw in ['conflict', 'military', 'invasion', 'escalation', 'war']):
+                        implications.append({'signal': 'Geopolitical risk spike', 'equities': 'Volatility expansion; VIX likely elevated; defense stocks outperform', 'fixed_income': 'Treasury bid as risk-off; HY spreads widen', 'fx': 'Classic safe havens rally: USD, CHF, JPY', 'commodities': 'Oil spikes on supply risk; gold rallies; agricultural disruption', 'trade_idea': 'Long VIX, Long GLD, Long crude, Reduce equity beta'})
+                    
+                    # Earnings implications
+                    if any(kw in text_lower for kw in ['earnings beat', 'strong results', 'beat estimates', 'blowout quarter', 'upside surprise']):
+                        implications.append({'signal': 'Positive earnings momentum', 'equities': 'EPS revision breadth positive; sector rotation toward quality growth', 'fixed_income': 'Corporate credit tightens; M&A and buyback activity supports', 'fx': 'US earnings outperformance supports USD via capital flows', 'commodities': 'Capex intentions from earnings calls signal commodity demand', 'trade_idea': 'Long sector leaders, Overweight quality factor'})
+                    if any(kw in text_lower for kw in ['guidance cut', 'lowered outlook', 'miss estimates', 'weak guidance', 'warned']):
+                        implications.append({'signal': 'Negative earnings revision cycle', 'equities': 'Estimate cuts cascade; margin compression theme; avoid high-expectation names', 'fixed_income': 'Credit risk re-prices; BBB cliff risk for leveraged companies', 'fx': 'Weaker earnings → slower growth → potential USD weakness long-term', 'commodities': 'Demand outlook weakens; capex deferrals reduce commodity consumption', 'trade_idea': 'Short high-beta, Long quality/low-vol, Hedge with puts'})
+                    
+                    # AI/Tech implications
+                    if any(kw in text_lower for kw in ['artificial intelligence', 'ai capex', 'data center', 'gpu', 'hyperscaler']):
+                        implications.append({'signal': 'AI capex cycle acceleration', 'equities': 'Semis (NVDA, AMD, AVGO), power/utilities, and cooling infrastructure benefit', 'fixed_income': 'Tech IG issuance to fund capex; stable credit quality', 'fx': 'USD supported by AI-driven capital inflows to US equities', 'commodities': 'Natural gas and uranium demand from data centers; copper for electrical infrastructure', 'trade_idea': 'Long SOXX/SMH, Long utilities (AI power demand), Long copper'})
                     
                     if not implications:
-                        implications.append("Monitor for follow-through price action to confirm directional bias")
+                        implications.append({'signal': 'No dominant macro signal', 'equities': 'Monitor for follow-through price action; maintain balanced positioning', 'fixed_income': 'Neutral duration; carry-focused approach appropriate', 'fx': 'Range-bound expectations; limited directional conviction', 'commodities': 'Supply-demand fundamentals drive; macro overlay limited', 'trade_idea': 'Neutral — await catalyst for directional commitment'})
                     
-                    # === GENERATE INSTITUTIONAL ANALYSIS ===
+                    # === STAGE 7: RISK FACTOR IDENTIFICATION ===
+                    risks = []
+                    risk_patterns = {
+                        'Valuation Risk': ['overvalued', 'stretched', 'expensive', 'bubble', 'frothy', 'rich valuation', 'high multiple'],
+                        'Liquidity Risk': ['liquidity', 'funding', 'credit crunch', 'bank run', 'withdrawal', 'redemption'],
+                        'Policy Risk': ['regulation', 'antitrust', 'legislation', 'executive order', 'oversight', 'compliance'],
+                        'Event Risk': ['election', 'referendum', 'trial', 'investigation', 'ruling', 'verdict'],
+                        'Crowding Risk': ['crowded trade', 'consensus', 'positioning', 'everyone expects', 'priced in', 'already discounted'],
+                        'Contagion Risk': ['spillover', 'contagion', 'systemic', 'domino', 'cascade'],
+                        'Tail Risk': ['black swan', 'tail risk', 'unprecedented', 'uncharted', 'worst case'],
+                    }
                     
-                    # Build the expert analysis paragraphs
+                    for risk_name, keywords in risk_patterns.items():
+                        if any(kw in text_lower for kw in keywords):
+                            risks.append(risk_name)
+                    
+                    # === STAGE 8: GENERATE INSTITUTIONAL SYNTHESIS ===
                     eastern = pytz.timezone('US/Eastern')
-                    
-                    # Paragraph 1: Article summary and key findings
-                    themes_str = ", ".join(primary_themes[:3]) if primary_themes else "general market dynamics"
-                    
-                    key_data_points = numbers_with_context[:3]
-                    data_summary = ""
-                    if key_data_points:
-                        data_summary = f" The article cites several notable data points: {key_data_points[0]}."
-                        if len(key_data_points) > 1:
-                            data_summary += f" Additionally, {key_data_points[1].lower() if key_data_points[1][0].isupper() else key_data_points[1]}."
-                    
-                    para1 = f"This article centers on {themes_str}, presenting a {sentiment.lower()} tone based on our textual analysis ({bull_count} constructive signals vs. {bear_count} cautionary flags).{data_summary}"
-                    
-                    # Paragraph 2: Market implications and positioning
-                    implications_text = implications[0] if implications else "The immediate market impact appears limited, with price action likely to be driven by broader macro factors."
-                    if len(implications) > 1:
-                        implications_text += f" Furthermore, {implications[1].lower() if implications[1][0].isupper() else implications[1]}."
-                    
-                    if sentiment in ['Bullish', 'Moderately Bullish']:
-                        positioning = "From a positioning standpoint, the narrative supports a constructive bias, though we would advise scaling into exposure rather than aggressive accumulation given the inherent uncertainty in any single-source analysis."
-                    elif sentiment in ['Bearish', 'Moderately Bearish']:
-                        positioning = "The risk-reward calculus suggests caution is warranted. Institutional investors may consider hedging exposure or reducing beta until the thesis is either confirmed or invalidated by subsequent price action."
-                    else:
-                        positioning = "The balanced tone suggests maintaining current positioning while monitoring for catalysts that could shift the narrative in either direction."
-                    
-                    para2 = f"From a macro perspective, {implications_text} {positioning}"
-                    
-                    # === DISPLAY RESULTS ===
-                    
-                    # Article header
                     source_domain = urlparse(url).netloc.replace('www.', '')
+                    
+                    themes_str = ", ".join([t['name'] for t in detected_themes[:3]]) if detected_themes else "general market dynamics"
+                    
+                    # Build multi-paragraph institutional analysis
+                    # Paragraph 1: Executive Summary
+                    para1 = f"This {source_domain} article centers on {themes_str}, presenting a {sentiment.lower()} tone across {word_count:,} words of analysis."
+                    if data_points:
+                        para1 += f" Our NLP pipeline identified {len(data_points)} quantitative data points and {len(detected_themes)} distinct macro themes."
+                    para1 += f" Weighted sentiment scoring ({bull_score:.0f} bullish vs. {bear_score:.0f} bearish, confidence: {confidence.lower()}) places this firmly in {sentiment.lower()} territory."
+                    
+                    # Paragraph 2: Thematic Deep Dive
+                    para2 = ""
+                    if primary_themes:
+                        para2 = f"The dominant narrative thread — {primary_themes[0]['name']} — carries direct implications for cross-asset positioning. "
+                        para2 += primary_themes[0]['asset_impact'].get('Equities', '') + " "
+                        if len(primary_themes) > 1:
+                            para2 += f"The secondary theme of {primary_themes[1]['name']} introduces a compounding factor: "
+                            para2 += primary_themes[1]['asset_impact'].get('Fixed Income', '')
+                    elif secondary_themes:
+                        para2 = f"While no single theme dominates, the article touches on {secondary_themes[0]['name']} with moderate intensity, suggesting the narrative is still forming. "
+                        para2 += "Institutional investors should monitor for escalation signals that would convert this into a primary driver."
+                    else:
+                        para2 = "The article lacks a concentrated macro theme, suggesting it's more informational than market-moving. Positioning changes based on this alone would be premature."
+                    
+                    # Paragraph 3: Positioning and Risk
+                    para3 = ""
+                    if implications and implications[0].get('trade_idea'):
+                        para3 = f"The prevailing signal — {implications[0]['signal']} — suggests the following tactical framework: {implications[0]['trade_idea']}. "
+                    
+                    if risks:
+                        para3 += f"Key risk factors identified include {', '.join(risks[:3]).lower()}, which could invalidate the base case. "
+                    
+                    if confidence == 'High':
+                        para3 += "The high signal clarity supports conviction-weighted positioning, though standard risk management protocols (defined stops, position limits) remain essential."
+                    elif confidence == 'Medium':
+                        para3 += "Moderate signal clarity warrants scaled entry rather than full conviction allocation. Let price action confirm the thesis before adding to exposure."
+                    else:
+                        para3 += "Low signal clarity suggests this article alone is insufficient to drive portfolio decisions. Cross-reference with additional sources and price action before taking directional exposure."
+                    
+                    # === DISPLAY: RESEARCH INTELLIGENCE REPORT ===
+                    
+                    # Report Header
                     st.markdown(f"""
-                    <div style="background: linear-gradient(135deg, rgba(88,166,255,0.1) 0%, rgba(163,113,247,0.05) 100%); border: 1px solid rgba(88,166,255,0.3); border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem;">
-                        <div style="font-size: 1.1rem; font-weight: 600; color: #ffffff; margin-bottom: 0.5rem;">{title}</div>
-                        <div style="display: flex; align-items: center; gap: 1rem;">
-                            <span style="font-size: 0.75rem; color: #8b949e;">Source: {source_domain}</span>
-                            <span style="background: {'rgba(63,185,80,0.2)' if 'Bullish' in sentiment else 'rgba(248,81,73,0.2)' if 'Bearish' in sentiment else 'rgba(210,153,34,0.2)'}; color: {sentiment_color}; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600;">{sentiment}</span>
-                            <span style="font-size: 0.7rem; color: #6e7681;">Analyzed: {datetime.now(eastern).strftime('%I:%M %p ET')}</span>
+                    <div style="background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a1f2e 100%); border: 1px solid rgba(88,166,255,0.3); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; position: relative; overflow: hidden;">
+                        <div style="position: absolute; top: 0; right: 0; background: {sentiment_color}; color: #000; padding: 0.3rem 1rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; border-radius: 0 12px 0 8px;">{sentiment.upper()}</div>
+                        <div style="font-size: 0.65rem; color: #a371f7; font-weight: 600; text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 0.5rem;">Research Intelligence Report</div>
+                        <div style="font-size: 1.15rem; font-weight: 600; color: #ffffff; margin-bottom: 0.75rem; padding-right: 120px;">{title}</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;">
+                            <span style="font-size: 0.75rem; color: #8b949e;">📰 {source_domain}</span>
+                            {'<span style="font-size: 0.75rem; color: #8b949e;">✍️ ' + author + '</span>' if author else ''}
+                            {'<span style="font-size: 0.75rem; color: #8b949e;">📅 ' + pub_date + '</span>' if pub_date else ''}
+                            <span style="font-size: 0.75rem; color: #8b949e;">📝 {word_count:,} words</span>
+                            <span style="font-size: 0.75rem; color: #8b949e;">🔍 Analyzed: {datetime.now(eastern).strftime('%I:%M %p ET')}</span>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Metrics row
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
+                    # Sentiment Gauge + Metrics
+                    gauge_col, met1, met2, met3, met4 = st.columns([2, 1, 1, 1, 1])
+                    with gauge_col:
+                        # Visual sentiment bar
                         st.markdown(f"""
-                        <div class="metric-card" style="text-align: center;">
-                            <div class="metric-value" style="color: #3fb950;">{bull_count}</div>
-                            <div class="metric-label">Bullish Signals</div>
+                        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                <span style="color: #8b949e; font-size: 0.7rem; text-transform: uppercase;">Sentiment Decomposition</span>
+                                <span style="color: {sentiment_color}; font-weight: 600; font-size: 0.85rem;">{sentiment_icon} {sentiment}</span>
+                            </div>
+                            <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-bottom: 0.4rem;">
+                                <div style="background: #3fb950; width: {bull_pct:.0f}%; transition: width 0.5s;"></div>
+                                <div style="background: #f85149; width: {bear_pct:.0f}%; transition: width 0.5s;"></div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.7rem;">
+                                <span style="color: #3fb950;">Bullish {bull_pct:.0f}% ({bull_score:.0f}pts)</span>
+                                <span style="color: #8b949e;">Confidence: {confidence}</span>
+                                <span style="color: #f85149;">Bearish {bear_pct:.0f}% ({bear_score:.0f}pts)</span>
+                            </div>
                         </div>
                         """, unsafe_allow_html=True)
-                    with col2:
-                        st.markdown(f"""
-                        <div class="metric-card" style="text-align: center;">
-                            <div class="metric-value" style="color: #f85149;">{bear_count}</div>
-                            <div class="metric-label">Bearish Signals</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with col3:
-                        st.markdown(f"""
-                        <div class="metric-card" style="text-align: center;">
-                            <div class="metric-value" style="color: #a371f7;">{len(primary_themes)}</div>
-                            <div class="metric-label">Macro Themes</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with col4:
-                        st.markdown(f"""
-                        <div class="metric-card" style="text-align: center;">
-                            <div class="metric-value" style="color: #58a6ff;">{len(mentioned_tickers)}</div>
-                            <div class="metric-label">Tickers Found</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    with met1:
+                        st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-value" style="color: #a371f7;">{len(detected_themes)}</div><div class="metric-label">Themes</div></div>', unsafe_allow_html=True)
+                    with met2:
+                        st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-value" style="color: #58a6ff;">{len(data_points)}</div><div class="metric-label">Data Points</div></div>', unsafe_allow_html=True)
+                    with met3:
+                        st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-value" style="color: #d29922;">{len(mentioned_tickers)}</div><div class="metric-label">Tickers</div></div>', unsafe_allow_html=True)
+                    with met4:
+                        st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-value" style="color: #f85149;">{len(risks)}</div><div class="metric-label">Risk Flags</div></div>', unsafe_allow_html=True)
                     
-                    # Macro themes
-                    if primary_themes:
-                        st.markdown("#### 🏷️ Primary Macro Themes")
-                        theme_cols = st.columns(len(primary_themes[:4]))
-                        theme_colors = ['#58a6ff', '#a371f7', '#3fb950', '#d29922']
-                        for i, theme in enumerate(primary_themes[:4]):
-                            with theme_cols[i]:
+                    # Macro Themes with Asset Impact
+                    if detected_themes:
+                        st.markdown("#### 🏷️ Macro Theme Decomposition")
+                        for theme in detected_themes[:4]:
+                            relevance_color = '#58a6ff' if theme['relevance'] == 'Primary' else '#6e7681'
+                            with st.expander(f"{theme['icon']} {theme['name']}  —  {theme['relevance']} (score: {theme['score']})", expanded=(theme['relevance'] == 'Primary')):
+                                impact = theme['asset_impact']
                                 st.markdown(f"""
-                                <div style="background: rgba({48 + i*20}, {54 + i*10}, {61 + i*15}, 0.5); border-left: 3px solid {theme_colors[i % 4]}; padding: 0.5rem 0.75rem; border-radius: 0 6px 6px 0;">
-                                    <span style="color: {theme_colors[i % 4]}; font-weight: 600; font-size: 0.85rem;">{theme}</span>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                                    <div style="background: rgba(63,185,80,0.1); border-left: 3px solid #3fb950; padding: 0.5rem 0.75rem; border-radius: 0 6px 6px 0;">
+                                        <div style="font-size: 0.65rem; color: #3fb950; font-weight: 600; text-transform: uppercase; margin-bottom: 0.25rem;">Equities</div>
+                                        <div style="font-size: 0.78rem; color: #c9d1d9;">{impact.get('Equities', 'N/A')}</div>
+                                    </div>
+                                    <div style="background: rgba(88,166,255,0.1); border-left: 3px solid #58a6ff; padding: 0.5rem 0.75rem; border-radius: 0 6px 6px 0;">
+                                        <div style="font-size: 0.65rem; color: #58a6ff; font-weight: 600; text-transform: uppercase; margin-bottom: 0.25rem;">Fixed Income</div>
+                                        <div style="font-size: 0.78rem; color: #c9d1d9;">{impact.get('Fixed Income', 'N/A')}</div>
+                                    </div>
+                                    <div style="background: rgba(210,153,34,0.1); border-left: 3px solid #d29922; padding: 0.5rem 0.75rem; border-radius: 0 6px 6px 0;">
+                                        <div style="font-size: 0.65rem; color: #d29922; font-weight: 600; text-transform: uppercase; margin-bottom: 0.25rem;">FX</div>
+                                        <div style="font-size: 0.78rem; color: #c9d1d9;">{impact.get('FX', 'N/A')}</div>
+                                    </div>
+                                    <div style="background: rgba(163,113,247,0.1); border-left: 3px solid #a371f7; padding: 0.5rem 0.75rem; border-radius: 0 6px 6px 0;">
+                                        <div style="font-size: 0.65rem; color: #a371f7; font-weight: 600; text-transform: uppercase; margin-bottom: 0.25rem;">Commodities</div>
+                                        <div style="font-size: 0.78rem; color: #c9d1d9;">{impact.get('Commodities', 'N/A')}</div>
+                                    </div>
                                 </div>
                                 """, unsafe_allow_html=True)
                     
-                    # Expert Analysis Section
-                    st.markdown("#### 🎩 Institutional Macro Analysis")
+                    # Institutional Synthesis
+                    st.markdown("#### 🎩 Institutional Synthesis")
                     st.markdown(f"""
-                    <div style="background: linear-gradient(135deg, rgba(163,113,247,0.1) 0%, rgba(88,166,255,0.05) 100%); border: 1px solid rgba(163,113,247,0.3); border-radius: 12px; padding: 1.5rem; margin: 1rem 0;">
-                        <div style="display: flex; align-items: center; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(163,113,247,0.2);">
-                            <span style="font-size: 0.7rem; color: #a371f7; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em;">Expert Assessment</span>
-                            <span style="margin-left: auto; font-size: 0.65rem; color: #6e7681;">Confidence: {'High' if abs(bull_count - bear_count) > 5 else 'Medium' if abs(bull_count - bear_count) > 2 else 'Low'}</span>
+                    <div style="background: linear-gradient(135deg, rgba(163,113,247,0.08) 0%, rgba(88,166,255,0.04) 100%); border: 1px solid rgba(163,113,247,0.25); border-radius: 12px; padding: 1.5rem; margin: 0.5rem 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(163,113,247,0.15);">
+                            <span style="font-size: 0.7rem; color: #a371f7; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em;">Senior Strategist Assessment</span>
+                            <span style="font-size: 0.65rem; color: #6e7681;">Signal Confidence: <span style="color: {'#3fb950' if confidence == 'High' else '#d29922' if confidence == 'Medium' else '#f85149'}; font-weight: 600;">{confidence}</span></span>
                         </div>
-                        <p style="color: #c9d1d9; font-size: 0.9rem; line-height: 1.8; text-align: justify; margin-bottom: 1rem; font-family: 'Georgia', serif;">{para1}</p>
-                        <p style="color: #c9d1d9; font-size: 0.9rem; line-height: 1.8; text-align: justify; margin: 0; font-family: 'Georgia', serif;">{para2}</p>
+                        <p style="color: #c9d1d9; font-size: 0.88rem; line-height: 1.85; text-align: justify; margin-bottom: 1rem; font-family: 'Georgia', serif;">{para1}</p>
+                        <p style="color: #c9d1d9; font-size: 0.88rem; line-height: 1.85; text-align: justify; margin-bottom: 1rem; font-family: 'Georgia', serif;">{para2}</p>
+                        <p style="color: #c9d1d9; font-size: 0.88rem; line-height: 1.85; text-align: justify; margin: 0; font-family: 'Georgia', serif;">{para3}</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Key Data Points
-                    if numbers_with_context:
-                        st.markdown("#### 📊 Key Data Points Extracted")
-                        for i, point in enumerate(numbers_with_context[:5]):
-                            st.markdown(f"""
-                            <div style="background: rgba(33,38,45,0.8); border-left: 3px solid #58a6ff; padding: 0.75rem 1rem; margin: 0.5rem 0; border-radius: 0 8px 8px 0;">
-                                <span style="color: #c9d1d9; font-size: 0.85rem;">{point}.</span>
-                            </div>
-                            """, unsafe_allow_html=True)
-                    
-                    # Market Implications
+                    # Cross-Asset Trade Implications
                     if implications:
-                        st.markdown("#### 💡 Market Implications")
-                        for imp in implications[:4]:
-                            st.markdown(f"""
-                            <div class="opportunity-item" style="margin: 0.4rem 0;">
-                                <span style="color: #7ee787;">→</span> {imp}
-                            </div>
-                            """, unsafe_allow_html=True)
+                        st.markdown("#### ⚡ Cross-Asset Implications & Trade Ideas")
+                        for imp in implications[:3]:
+                            signal_name = imp.get('signal', '')
+                            with st.expander(f"📡 Signal: {signal_name}", expanded=True):
+                                st.markdown(f"""
+                                <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; font-family: 'Consolas', 'Monaco', monospace;">
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #3fb950; text-transform: uppercase; font-weight: 600; margin-bottom: 0.3rem;">📈 Equities</div>
+                                            <div style="font-size: 0.8rem; color: #c9d1d9;">{imp.get('equities', 'N/A')}</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #58a6ff; text-transform: uppercase; font-weight: 600; margin-bottom: 0.3rem;">📊 Fixed Income</div>
+                                            <div style="font-size: 0.8rem; color: #c9d1d9;">{imp.get('fixed_income', 'N/A')}</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #d29922; text-transform: uppercase; font-weight: 600; margin-bottom: 0.3rem;">💱 FX</div>
+                                            <div style="font-size: 0.8rem; color: #c9d1d9;">{imp.get('fx', 'N/A')}</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #a371f7; text-transform: uppercase; font-weight: 600; margin-bottom: 0.3rem;">🛢️ Commodities</div>
+                                            <div style="font-size: 0.8rem; color: #c9d1d9;">{imp.get('commodities', 'N/A')}</div>
+                                        </div>
+                                    </div>
+                                    <div style="background: rgba(255,149,0,0.1); border: 1px solid rgba(255,149,0,0.3); border-radius: 6px; padding: 0.6rem 0.75rem; margin-top: 0.5rem;">
+                                        <span style="color: #ff9500; font-size: 0.7rem; font-weight: 600;">💡 TACTICAL IDEA:</span>
+                                        <span style="color: #fff; font-size: 0.85rem; margin-left: 0.5rem; font-weight: 500;">{imp.get('trade_idea', 'N/A')}</span>
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
                     
-                    # Mentioned Tickers
+                    # Key Data Points
+                    if data_points:
+                        st.markdown("#### 📊 Quantitative Data Extracted")
+                        # Group by category
+                        cats = {}
+                        for dp in data_points:
+                            cat = dp['category']
+                            if cat not in cats:
+                                cats[cat] = []
+                            cats[cat].append(dp['text'])
+                        
+                        for cat, items in cats.items():
+                            for item in items[:3]:
+                                st.markdown(f"""
+                                <div style="background: rgba(33,38,45,0.8); border-left: 3px solid #58a6ff; padding: 0.6rem 1rem; margin: 0.35rem 0; border-radius: 0 8px 8px 0; display: flex; align-items: flex-start; gap: 0.75rem;">
+                                    <span style="color: #58a6ff; font-size: 0.7rem; font-weight: 600; white-space: nowrap; min-width: 90px;">{cat}</span>
+                                    <span style="color: #c9d1d9; font-size: 0.82rem;">{item}.</span>
+                                </div>
+                                """, unsafe_allow_html=True)
+                    
+                    # Risk Flags
+                    if risks:
+                        st.markdown("#### ⚠️ Risk Factor Flags")
+                        risk_cols = st.columns(min(4, len(risks)))
+                        risk_icons = {'Valuation Risk': '💎', 'Liquidity Risk': '💧', 'Policy Risk': '⚖️', 'Event Risk': '📅', 'Crowding Risk': '👥', 'Contagion Risk': '🔗', 'Tail Risk': '🦢'}
+                        for i, risk in enumerate(risks[:4]):
+                            with risk_cols[i]:
+                                st.markdown(f"""
+                                <div style="background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                    <div style="font-size: 1.2rem;">{risk_icons.get(risk, '⚠️')}</div>
+                                    <div style="color: #ffa198; font-size: 0.75rem; font-weight: 600; margin-top: 0.3rem;">{risk}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                    
+                    # Key People Mentioned
+                    if key_people:
+                        st.markdown("#### 👤 Key Figures Quoted")
+                        people_cols = st.columns(min(4, len(key_people)))
+                        for i, person in enumerate(key_people[:4]):
+                            with people_cols[i]:
+                                role_color = '#a371f7' if person['role'] in ['CEO', 'Chair', 'Official'] else '#58a6ff'
+                                st.markdown(f"""
+                                <div style="background: rgba(33,38,45,0.5); border: 1px solid #30363d; border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                    <div style="color: #fff; font-size: 0.82rem; font-weight: 600;">{person['name']}</div>
+                                    <div style="color: {role_color}; font-size: 0.7rem;">{person['role']}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                    
+                    # Mentioned Securities with action buttons
                     if mentioned_tickers:
-                        st.markdown("#### 📈 Mentioned Securities")
-                        st.markdown("<p style='color: #8b949e; font-size: 0.75rem;'>Click any ticker for detailed analysis</p>", unsafe_allow_html=True)
+                        st.markdown("#### 📈 Securities Referenced")
+                        st.markdown("<p style='color: #8b949e; font-size: 0.75rem;'>Click any ticker for full institutional analysis</p>", unsafe_allow_html=True)
                         ticker_cols = st.columns(min(6, len(mentioned_tickers)))
                         for i, ticker in enumerate(mentioned_tickers[:6]):
                             with ticker_cols[i]:
@@ -7733,19 +8037,41 @@ def main():
                                     st.session_state.show_stock_report = True
                                     st.rerun()
                     
-                    # Full text expander
+                    # Sentiment Signal Breakdown (expandable)
+                    with st.expander("🔬 Sentiment Signal Breakdown", expanded=False):
+                        sig_col1, sig_col2 = st.columns(2)
+                        with sig_col1:
+                            st.markdown("**Bullish Signals Detected:**")
+                            for sig in bull_signals[:8]:
+                                st.markdown(f"<span style='color: #3fb950; font-size: 0.8rem;'>+ {sig}</span>", unsafe_allow_html=True)
+                        with sig_col2:
+                            st.markdown("**Bearish Signals Detected:**")
+                            for sig in bear_signals[:8]:
+                                st.markdown(f"<span style='color: #f85149; font-size: 0.8rem;'>− {sig}</span>", unsafe_allow_html=True)
+                    
+                    # Full article text
                     with st.expander("📄 View Extracted Article Text", expanded=False):
-                        st.text_area("Article Content", article_text[:5000], height=300, disabled=True)
+                        st.text_area("Article Content", article_text[:6000], height=300, disabled=True)
                     
                 except Exception as e:
                     st.error(f"Error analyzing URL: {str(e)}")
                     st.info("Tips: Ensure the URL is accessible and points to a public article. Some paywalled content may not be extractable.")
         else:
             st.markdown("""
-            <div style="background: rgba(33,38,45,0.5); border: 1px dashed rgba(88,166,255,0.3); border-radius: 12px; padding: 2rem; text-align: center;">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">📰</div>
-                <div style="color: #8b949e; font-size: 0.9rem;">Paste a financial news article URL above to receive institutional-grade macro analysis</div>
-                <div style="color: #6e7681; font-size: 0.75rem; margin-top: 0.5rem;">Supported sources: Reuters, Bloomberg, WSJ, FT, CNBC, Yahoo Finance, and more</div>
+            <div style="background: rgba(33,38,45,0.5); border: 1px dashed rgba(88,166,255,0.3); border-radius: 12px; padding: 2.5rem; text-align: center;">
+                <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">📰</div>
+                <div style="color: #c9d1d9; font-size: 1rem; font-weight: 500; margin-bottom: 0.5rem;">Paste a financial article URL for institutional-grade analysis</div>
+                <div style="color: #8b949e; font-size: 0.82rem; margin-bottom: 1rem;">Our pipeline extracts macro themes, cross-asset implications, sentiment decomposition, and trade ideas</div>
+                <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem;">
+                    <span style="background: rgba(88,166,255,0.1); color: #58a6ff; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.72rem;">Reuters</span>
+                    <span style="background: rgba(88,166,255,0.1); color: #58a6ff; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.72rem;">Bloomberg</span>
+                    <span style="background: rgba(88,166,255,0.1); color: #58a6ff; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.72rem;">WSJ</span>
+                    <span style="background: rgba(88,166,255,0.1); color: #58a6ff; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.72rem;">FT</span>
+                    <span style="background: rgba(88,166,255,0.1); color: #58a6ff; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.72rem;">CNBC</span>
+                    <span style="background: rgba(88,166,255,0.1); color: #58a6ff; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.72rem;">Yahoo Finance</span>
+                    <span style="background: rgba(88,166,255,0.1); color: #58a6ff; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.72rem;">Seeking Alpha</span>
+                    <span style="background: rgba(88,166,255,0.1); color: #58a6ff; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.72rem;">MarketWatch</span>
+                </div>
             </div>
             """, unsafe_allow_html=True)
     
